@@ -70,8 +70,9 @@ async def telegram_webhook(update: dict):
 # Launch Telegram bot async inside FastAPI
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(telegram_app.initialize())
-    asyncio.create_task(telegram_app.start())
+   await telegram_app.initialize()
+await telegram_app.start()
+
 
 @app.on_event("shutdown")
 async def shutdown():
