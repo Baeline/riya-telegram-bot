@@ -43,6 +43,7 @@ scope = [
 ]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDS_JSON), scope)
 sh = gspread.authorize(creds).open("Riya Conversations").sheet1
+message_counts = {}  # In-memory message counter per user
 
 # -------------------------------------------------
 # FastAPI (health‑check endpoint)
@@ -59,7 +60,6 @@ async def health():
 DetectorFactory.seed = 0  # deterministic
 
 def detect_lang_safe(text: str) -> str:
-    """Return 'en' or 'hi' (Hinglish) – default to en if unsure."""
     try:
         if len(text.strip()) < 5:
             return "en"
@@ -95,14 +95,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     lang = detect_lang_safe(user_text)
 
+    # Count messages per user
+    message_counts[user_id] = message_counts.get(user_id, 0) + 1
+    msg_count = message_counts[user_id]
+
     reply = generate_reply(user_text, lang)
     await update.message.reply_text(reply)
 
-    # Log to sheet
     try:
         sh.append_row([
             datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             user_id,
+            msg_count,
             lang,
             user_text,
             reply,
