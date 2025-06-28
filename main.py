@@ -17,18 +17,17 @@ from oauth2client.service_account import ServiceAccountCredentials
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Environment Variables ---
+# --- Env vars ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")  # Minified JSON string
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
 if not all([BOT_TOKEN, OPENAI_API_KEY, GOOGLE_CREDS_JSON]):
-    raise RuntimeError("Missing one or more env vars.")
+    raise RuntimeError("Missing environment variables")
 
-# --- Setup OpenAI ---
+# --- OpenAI + Google Sheets setup ---
 openai.api_key = OPENAI_API_KEY
 
-# --- Setup Google Sheets ---
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(eval(GOOGLE_CREDS_JSON), scope)
 sheet = gspread.authorize(creds).open("Riya Conversations").sheet1
@@ -41,7 +40,7 @@ def get_lang(text: str) -> str:
         return "unknown"
 
 def generate_reply(user_msg: str, lang: str) -> str:
-    system_prompt = "You're Riya, a flirty, emotional AI girlfriend. Respond based on user's mood."
+    system_prompt = "You're Riya, a flirty AI girlfriend. Be charming and emotional."
     return openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -50,11 +49,11 @@ def generate_reply(user_msg: str, lang: str) -> str:
         ]
     ).choices[0].message.content.strip()
 
-# --- Telegram Handlers ---
+# --- Telegram handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hey you 😘 I’m Riya – chat with me. First 2 days are free!")
+    await update.message.reply_text("Hey cutie 😘 I’m Riya – let’s chat! First 2 days free!")
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
     lang = get_lang(text)
@@ -62,7 +61,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = generate_reply(text, lang)
     await update.message.reply_text(reply)
 
-    # Log to Google Sheet
+    # Log to Sheet
     try:
         sheet.append_row([
             datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
@@ -72,13 +71,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply
         ])
     except Exception as e:
-        logger.error(f"Logging to sheet failed: {e}")
+        logger.error(f"Sheet error: {e}")
 
-# --- Start Bot ---
+# --- Start bot ---
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
 if __name__ == "__main__":
-    logger.info("Starting Riya Bot 💋")
+    logger.info("Starting Riya bot... 💞")
     app.run_polling()
