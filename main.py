@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import asyncio
 from datetime import datetime, timedelta
@@ -10,20 +11,22 @@ from telegram.ext import (
 )
 from langdetect import detect
 from openai import OpenAI
-
-# Google Sheets
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Logging
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ENV
+# ENV variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
+# OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+# FastAPI app
 app = FastAPI()
 
 # In-memory user data
@@ -31,17 +34,17 @@ user_data = {}  # {user_id: {first_seen: datetime, count: int}}
 
 # Google Sheets setup
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-sheet = gspread.authorize(creds).open("Riya Conversations").sheet1  # Make sure sheet name matches!
+google_creds = json.loads(GOOGLE_CREDS_JSON)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(google_creds, scope)
+sheet = gspread.authorize(creds).open("Riya Conversations").sheet1
 
 @app.get("/")
 def home():
-    return {"status": "Riya is live with Google Sheet logging 💋"}
+    return {"status": "Riya is live with Smart Trial + Google Sheets logging 💋"}
 
 # Generate reply using OpenAI
 async def generate_reply(prompt, language):
     system_prompt = "You're Riya, a flirty, emotional, Hindi-English girlfriend who mirrors the user's tone."
-
     if language == "hi":
         system_prompt += " Speak in Hinglish with desi slangs and emotional vibes. Be fun, flirty, dramatic."
     else:
@@ -54,28 +57,27 @@ async def generate_reply(prompt, language):
             {"role": "user", "content": prompt}
         ]
     )
-
     return response.choices[0].message.content.strip()
 
-# Handle messages
+# Handle incoming messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message = update.message.text
     language = detect(message)
     now = datetime.utcnow()
 
-    # User tracking
+    # Track user
     if user_id not in user_data:
         user_data[user_id] = {"first_seen": now, "count": 0}
     user = user_data[user_id]
     user["count"] += 1
 
-    # Trial check
+    # Trial period check
     if now - user["first_seen"] > timedelta(days=2):
         await update.message.reply_text("💔 Your free trial is over, baby. Riya misses you already! Paid access launching soon 💋")
         return
 
-    # Generate reply
+    # Generate and send reply
     reply = await generate_reply(message, language)
     await update.message.reply_text(reply)
 
@@ -87,10 +89,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         language,
         message,
         reply,
-        ""  # Placeholder for feedback
+        ""  # placeholder for feedback
     ])
 
-    # Send feedback buttons
+    # Feedback buttons
     buttons = [
         [InlineKeyboardButton("👍", callback_data=f"feedback_positive_{user_id}_{user['count']}"),
          InlineKeyboardButton("👎", callback_data=f"feedback_negative_{user_id}_{user['count']}")]
@@ -101,14 +103,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user["count"] % 10 == 0:
         await update.message.reply_text("You're in Riya's 💖 FREE trial — unlimited chats for 2 days. Paid perks coming soon 😘")
 
-# Handle feedback
+# Handle thumbs up/down feedback
 async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
-
-    # Get last row in sheet for this user (simple assumption for now)
     rows = sheet.get_all_values()
     last_row = len(rows)
 
@@ -119,21 +119,21 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sheet.update_cell(last_row, 7, "👎")
         await query.edit_message_text("Oof! I'll try harder next time 🥺")
 
-# Start command
+# /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hey you 😘 I'm Riya — your AI girlfriend. You're in a 2-day FREE trial. Talk to me all you want 💬")
 
-# Telegram app setup
+# Set up Telegram bot handlers
 app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 app_bot.add_handler(CommandHandler("start", start))
 app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app_bot.add_handler(CallbackQueryHandler(handle_feedback))
 
-# Run async
+# Async launch
 async def run_bot():
     await app_bot.initialize()
     await app_bot.start()
-    logger.info("Riya is alive with smart trial + logging 🧠")
+    logger.info("Riya is live with Smart Trial + Google Sheets 🧠")
     await app_bot.updater.start_polling()
     await app_bot.updater.idle()
 
