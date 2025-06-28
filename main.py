@@ -126,5 +126,13 @@ async def telegram_main():
 # Run Telegram bot alongside FastAPI
 # -------------------------------------------------
 @app.on_event("startup")
+import uvicorn
+
+@app.on_event("startup")
 def start_bot():
-    Thread(target=lambda: asyncio.run(telegram_main()), daemon=True).start()
+    loop = asyncio.get_event_loop()
+    loop.create_task(telegram_main())
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+
