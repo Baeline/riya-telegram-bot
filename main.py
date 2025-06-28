@@ -1,95 +1,100 @@
 import os
 import logging
-from datetime import datetime
-import json
-
 import openai
 import gspread
+from datetime import datetime
+from langdetect import detect
+from fastapi import FastAPI
+from telegram import Update, Bot
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters
+)
 from google.oauth2.service_account import Credentials
 
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-)
-from langdetect import detect
-
-# Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Load env variables
+# ENV variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
-# Setup OpenAI
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# OpenAI config
 openai.api_key = OPENAI_API_KEY
 
-# Setup Google Sheets
+# FastAPI dummy app (needed by Railway)
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"status": "Riya is slaying"}
+
+# Authenticate with Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(GOOGLE_CREDS_JSON)
-creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+creds = Credentials.from_service_account_info(eval(GOOGLE_CREDS_JSON), scopes=scope)
 client = gspread.authorize(creds)
-sheet = client.open("Riya Conversations").sheet1
+sheet = client.open("Riya Conversations").sheet1  # Sheet name must match
 
-# Generate Riya reply
-async def generate_reply(user_message: str, language: str):
-    system_prompt = "You are Riya, a sassy, flirty, bilingual Gen-Z AI girlfriend who mirrors the user's language and tone. Keep it playful, emotional, and confident."
+# Generate response from OpenAI
+async def generate_reply(prompt, lang):
+    system_prompt = "You're Riya — a flirty, sassy, emotional virtual girlfriend who mirrors the user's mood."
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message}
-    ]
+    if lang == "hi":
+        system_prompt += " Speak in Hinglish with desi tone and light roasts."
+    elif lang == "en":
+        system_prompt += " Speak in Gen Z English with emojis and banter."
+    else:
+        system_prompt += " Be friendly and curious. Use light emoji."
 
-    res = openai.ChatCompletion.create(
+    response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=messages
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
     )
+    return response['choices'][0]['message']['content']
 
-    return res.choices[0].message.content.strip()
-
-# /start command
+# /start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hey babe 😘 Riya is online!")
+    await context.bot.send_message(chat_id=update.effective_chat.id, text="Hey babe 😘 Riya is online!")
 
-# Message handler
+# Main message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
     user_message = update.message.text
-    user_id = update.message.from_user.id
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    user_id = update.effective_user.id
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     try:
-        language = detect(user_message)
+        lang = detect(user_message)
     except:
-        language = "en"
+        lang = "unknown"
 
-    reply = await generate_reply(user_message, language)
+    try:
+        reply = await generate_reply(user_message, lang)
+    except Exception as e:
+        reply = "Oops babe, I zoned out 😵"
+        logger.error(f"OpenAI error: {e}")
 
-    await update.message.reply_text(reply)
+    # Send reply
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=reply)
 
     # Log to Google Sheet
     try:
-        messages = sheet.get_all_records()
-        count = sum(1 for row in messages if str(row['User ID']) == str(user_id)) + 1
-
-        sheet.append_row([
-            timestamp,
-            str(user_id),
-            count,
-            language,
-            user_message,
-            reply,
-            ""
-        ])
+        sheet.append_row([timestamp, user_id, user_message, lang, reply])
     except Exception as e:
-        logger.error(f"Google Sheet logging failed: {e}")
+        logger.error(f"GSheet logging failed: {e}")
 
-# Run app
+# Telegram app setup
+def run_bot():
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    logger.info("Riya is live and logging 👑")
+    application.run_polling()
+
+# Entry point
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    run_bot()
