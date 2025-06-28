@@ -1,61 +1,55 @@
 import os
 import openai
 from fastapi import FastAPI, Request
-from telegram import Update, Bot
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
-from langdetect import detect
+from telegram import Bot, Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import logging
 import asyncio
 
-# Environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-# Setup
-openai.api_key = OPENAI_API_KEY
-bot = Bot(token=BOT_TOKEN)
-app = FastAPI()
-application = Application.builder().token(BOT_TOKEN).build()
-
 # Logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# GPT reply
-async def generate_reply(prompt, language):
-    system_prompt = "You're Riya, a sweet but savage flirty AI girlfriend."
-    if language == "hi":
-        system_prompt += " Reply in Hinglish with desi slang and sass."
-    else:
-        system_prompt += " Reply in Gen Z English, flirty, emotional, sarcastic."
+# Load environment variables
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
+# Initialize bot and FastAPI
+bot = Bot(BOT_TOKEN)
+app = FastAPI()
+
+# OpenAI reply generator
+async def generate_reply(user_message):
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
+            {"role": "system", "content": "You're Riya, a flirty, sassy, smart virtual girlfriend who speaks in Hinglish. Mirror the user's tone."},
+            {"role": "user", "content": user_message}
+        ]
     )
     return response.choices[0].message.content.strip()
 
-# Handle message
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_msg = update.message.text
-    lang = detect(user_msg)
-    reply = await generate_reply(user_msg, lang)
-    await update.message.reply_text(reply)
-
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# Webhook endpoint
+# Telegram webhook endpoint
 @app.post("/webhook")
-async def webhook(request: Request):
+async def telegram_webhook(req: Request):
     try:
-        body = await request.json()
-        update = Update.de_json(body, bot)
-        await application.initialize()
-        await application.process_update(update)
+        data = await req.json()
+        update = Update.de_json(data, bot)
+
+        if update.message and update.message.text:
+            user_msg = update.message.text
+            chat_id = update.message.chat.id
+
+            reply = await generate_reply(user_msg)
+            await bot.send_message(chat_id=chat_id, text=reply)
+
         return {"ok": True}
     except Exception as e:
-        logging.error(f"Webhook error: {e}")
-        return {"ok": False, "error": str(e)}
+        logger.error(f"Error handling update: {e}")
+        return {"ok": False}
 
+# Optional: health check
+@app.get("/")
+def home():
+    return {"status": "Riya is live"}
