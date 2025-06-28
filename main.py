@@ -37,7 +37,8 @@ creds_dict = json.loads(os.getenv("GOOGLE_CREDS_JSON"))
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 
 client = gspread.authorize(creds)
-sheet = client.open("Riya Logs").sheet1
+sheet = client.open("Riya Conversations").sheet1
+
 
 # GPT Response Generator
 def generate_reply(user_input, lang_code):
