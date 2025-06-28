@@ -118,10 +118,9 @@ tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 async def run_bot():
-    await tg_app.initialize()
-    await tg_app.start()
+    
     logger.info("Riya bot started ✅")
-    await tg_app.updater.start_polling()
-    await tg_app.updater.idle()
+await tg_app.run_polling()
+
 
 asyncio.create_task(run_bot())
