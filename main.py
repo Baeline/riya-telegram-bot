@@ -1,6 +1,6 @@
 from pathlib import Path
 
-# Final patched main.py content with correct sheet name and safety checks
+# Re-define the fixed main.py after kernel reset
 final_main_py = """
 import os
 import logging
