@@ -63,6 +63,7 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_
 # FastAPI webhook endpoint
 @app.post("/webhook")
 async def telegram_webhook(update: dict):
+    logger.info("Received update from Telegram")
     update_obj = Update.de_json(update, telegram_app.bot)
     await telegram_app.update_queue.put(update_obj)
     return {"ok": True}
@@ -70,8 +71,9 @@ async def telegram_webhook(update: dict):
 # Launch Telegram bot async inside FastAPI
 @app.on_event("startup")
 async def startup():
-   await telegram_app.initialize()
-await telegram_app.start()
+    await telegram_app.initialize()
+    await telegram_app.start()
+
 
 
 @app.on_event("shutdown")
