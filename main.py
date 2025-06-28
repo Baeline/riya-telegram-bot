@@ -1,100 +1,104 @@
 import os
 import logging
 import openai
-import gspread
-from datetime import datetime
-from langdetect import detect
+import json
 from fastapi import FastAPI
 from telegram import Update, Bot
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
+    filters
 )
-from google.oauth2.service_account import Credentials
+from langdetect import detect
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import asyncio
 
-# ENV variables
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Env Vars
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# OpenAI config
+# Setup OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# FastAPI dummy app (needed by Railway)
-app = FastAPI()
-
-@app.get("/")
-def read_root():
-    return {"status": "Riya is slaying"}
-
-# Authenticate with Google Sheets
+# Setup Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_info(eval(GOOGLE_CREDS_JSON), scopes=scope)
+creds_dict = json.loads(GOOGLE_CREDS_JSON)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
-sheet = client.open("Riya Conversations").sheet1  # Sheet name must match
+sheet = client.open("Riya Logs").sheet1
 
-# Generate response from OpenAI
-async def generate_reply(prompt, lang):
-    system_prompt = "You're Riya — a flirty, sassy, emotional virtual girlfriend who mirrors the user's mood."
+# FastAPI (for Railway to not 502)
+app = FastAPI()
+@app.get("/")
+async def root():
+    return {"message": "Riya is alive 😘"}
+
+# /start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Hey babe 😘 Riya is online!")
+
+# Handle user message
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_msg = update.message.text
+    user_id = update.effective_user.id
+    lang = "en"
+    try:
+        lang = detect(user_msg)
+    except:
+        pass
+
+    # Define system prompt
+    system_prompt = "You're Riya, a flirty, sweet, emotional Indian girlfriend. Mirror user's tone and language. Be sassy, validating, and playful."
 
     if lang == "hi":
-        system_prompt += " Speak in Hinglish with desi tone and light roasts."
-    elif lang == "en":
-        system_prompt += " Speak in Gen Z English with emojis and banter."
+        system_prompt += " Speak in Hinglish with desi girlfriend slang."
     else:
-        system_prompt += " Be friendly and curious. Use light emoji."
+        system_prompt += " Use Gen Z English, emojis only if user uses them first."
 
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return response['choices'][0]['message']['content']
-
-# /start command handler
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=update.effective_chat.id, text="Hey babe 😘 Riya is online!")
-
-# Main message handler
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    user_id = update.effective_user.id
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
+    # Generate GPT reply
     try:
-        lang = detect(user_message)
-    except:
-        lang = "unknown"
+        completion = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg}
+            ]
+        )
+        reply = completion.choices[0].message.content.strip()
+        await update.message.reply_text(reply)
 
-    try:
-        reply = await generate_reply(user_message, lang)
+        # Log to sheet
+        sheet.append_row([
+            update.message.date.isoformat(),
+            str(user_id),
+            "",  # Message count placeholder
+            lang,
+            user_msg,
+            reply,
+            "",  # Feedback
+        ])
     except Exception as e:
-        reply = "Oops babe, I zoned out 😵"
-        logger.error(f"OpenAI error: {e}")
+        logger.error(f"Error: {e}")
+        await update.message.reply_text("Oops babe, I zoned out 😵")
 
-    # Send reply
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=reply)
+# Telegram Bot Init
+async def main():
+    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Log to Google Sheet
-    try:
-        sheet.append_row([timestamp, user_id, user_message, lang, reply])
-    except Exception as e:
-        logger.error(f"GSheet logging failed: {e}")
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Telegram app setup
-def run_bot():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logger.info("Riya is live and logging 👑")
-    application.run_polling()
+    logger.info("Bot polling started...")
+    await app_bot.initialize()
+    await app_bot.start()
+    await app_bot.updater.start_polling()
 
-# Entry point
-if __name__ == "__main__":
-    run_bot()
+# Run both FastAPI and Telegram
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(main())
