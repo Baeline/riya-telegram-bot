@@ -1,5 +1,5 @@
-openai>=1.0.0
-python-telegram-bot==20.3
-langdetect
 fastapi
 uvicorn
+python-telegram-bot==20.3
+langdetect
+openai>=1.0.0
