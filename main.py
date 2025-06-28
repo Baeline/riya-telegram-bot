@@ -1,61 +1,64 @@
 import os
 import logging
-from telegram import Update, Bot
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 from fastapi import FastAPI, Request
 import openai
+from telegram import Bot, Update
+from telegram.ext import Application, ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext._webhookhandler import WebhookRequestHandler
+from langdetect import detect
 
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment variables
+# Secrets
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-openai.api_key = OPENAI_API_KEY
-bot = Bot(BOT_TOKEN)
-
-# FastAPI app
+# Init
 app = FastAPI()
+bot = Bot(BOT_TOKEN)
+openai.api_key = OPENAI_API_KEY
 
-# Telegram bot application
-telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+telegram_app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# Reply generator using OpenAI
-async def generate_reply(prompt):
+# Core logic
+async def generate_reply(prompt, language):
+    system_prompt = "You're Riya, a flirty, emotional virtual girlfriend who mirrors the user's tone and language."
+    if language == "hi":
+        system_prompt += " Speak in Hinglish with desi Hindi slang and sweet teasing vibes. Use emojis rarely."
+    else:
+        system_prompt += " Speak in Gen Z English, a little savage, always mirroring the user's mood. Use emojis if the user does."
+
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "You're Riya — a flirty, sassy, desi girlfriend. Speak in Hinglish, mirror user's tone. Keep it spicy."},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        max_tokens=150
     )
     return response.choices[0].message.content.strip()
 
-# Telegram message handler
+# Message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    reply = await generate_reply(user_text)
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=reply)
+    if update.message:
+        user_message = update.message.text
+        language = detect(user_message)
+        reply = await generate_reply(user_message, language)
+        await update.message.reply_text(reply)
 
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+telegram_app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-# Webhook route
+# Webhook route for Telegram
 @app.post("/webhook")
-async def webhook(request: Request):
-    json_data = await request.json()
-    update = Update.de_json(json_data, bot)
-    await telegram_app.process_update(update)
-    return {"ok": True}
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    await telegram_app.update_queue.put(Update.de_json(data, bot))
+    return {"ok": True}  # 🛑 This line is what fixes the "502" error.
 
-# Health check
+# Health check route
 @app.get("/")
 async def root():
-    return {"status": "Riya is slaying 💅"}
+    return {"status": "ok"}
 
-# Run Telegram bot polling (not needed in webhook mode, just for local testing)
-if __name__ == "__main__":
-    import uvicorn
-    logger.info("Starting Riya on port 8080...")
-    uvicorn.run("main:app", host="0.0.0.0", port=8080)
