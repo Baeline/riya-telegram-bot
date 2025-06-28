@@ -1,108 +1,127 @@
 import os
+import json
 import logging
+import asyncio
+from datetime import datetime
 from fastapi import FastAPI
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler,
-    MessageHandler, ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters
 )
-from datetime import datetime
 from langdetect import detect, DetectorFactory
 import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Logging
+# -------------------------------------------------
+# Logging setup
+# -------------------------------------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("riya-bot")
 
-# Environment variables
+# -------------------------------------------------
+# Environment variables (Railway → Settings → Variables)
+# -------------------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")  # <-- minified JSON in env var
 
-# OpenAI client
+if not GOOGLE_CREDS_JSON:
+    raise RuntimeError("GOOGLE_CREDS_JSON env var is missing – add it in Railway → Settings → Variables")
+
+# -------------------------------------------------
+# External clients
+# -------------------------------------------------
 openai.api_key = OPENAI_API_KEY
 
-# FastAPI instance for Railway
+# Google Sheets auth (load creds from ENV instead of local file!)
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+creds_dict = json.loads(GOOGLE_CREDS_JSON)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+sheet = gspread.authorize(creds).open("Riya Conversations").sheet1
+
+# -------------------------------------------------
+# FastAPI (for Railway health check)
+# -------------------------------------------------
 app = FastAPI()
 
 @app.get("/")
 async def root():
-    return {"status": "Riya is online 😘"}
+    return {"status": "Riya is live 🩷"}
 
-# Setup Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client = gspread.authorize(creds)
-sheet = client.open("Riya Conversations").sheet1
+# -------------------------------------------------
+# Utility: Safe language detection
+# -------------------------------------------------
+DetectorFactory.seed = 0  # deterministic
 
-# Language detection with safety
-DetectorFactory.seed = 0
-
-def get_language_safe(text):
+def get_language_safe(text: str) -> str:
     try:
         if len(text.strip()) < 5:
             return "en"
         lang = detect(text)
-        return lang if lang in ['en', 'hi'] else 'en'
-    except:
+        return lang if lang in {"en", "hi"} else "en"
+    except Exception:
         return "en"
 
-# AI reply function
-def generate_reply(prompt, language):
-    system_prompt = "You're Riya, a flirty, emotional girlfriend who mirrors the user's mood."
+# -------------------------------------------------
+# AI reply helper
+# -------------------------------------------------
+
+def generate_reply(user_text: str, language: str) -> str:
+    system_prompt = "You're Riya, a flirty, emotional girlfriend who mirrors the user's mood."  # base
     if language == "hi":
-        system_prompt += " Speak in Hinglish with desi girlfriend vibes, cute slang, and emojis."
+        system_prompt += " Speak in Hinglish with desi GF vibes, cute slang, and emojis."  # Hindi/Hinglish style
     else:
-        system_prompt += " Speak in Gen-Z English, flirt naturally, and mirror the user's tone."
+        system_prompt += " Speak in Gen‑Z English, witty and playful."  # English style
 
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
+            {"role": "user", "content": user_text},
+        ],
     )
-    return response.choices[0].message["content"].strip()
+    return response.choices[0].message.content.strip()
 
-# Telegram /start
+# -------------------------------------------------
+# Telegram handlers
+# -------------------------------------------------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hey you 👀 I’m Riya, your AI bae. Tell me something spicy 😘")
+    await update.message.reply_text("Hey you 😘 I’m Riya – chat with me, I don't bite… much!")
 
-# Handle messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_message = update.message.text
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
-    # Detect language
-    language = get_language_safe(user_message)
+    user_text = update.message.text
+    language = get_language_safe(user_text)
 
-    # Generate Riya's reply
-    riya_reply = generate_reply(user_message, language)
+    reply = generate_reply(user_text, language)
+    await update.message.reply_text(reply)
 
-    # Count user's messages (in the sheet)
-    records = sheet.get_all_records()
-    message_count = sum(1 for row in records if str(row["User ID"]) == str(user_id)) + 1
+    # log to Google Sheet
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        sheet.append_row([timestamp, user_id, language, user_text, reply])
+    except Exception as e:
+        logger.error("Failed to append to sheet: %s", e)
 
-    # Log to sheet
-    sheet.append_row([timestamp, user_id, message_count, language, user_message, riya_reply, ""])
+# -------------------------------------------------
+# Telegram bot runner
+# -------------------------------------------------
 
-    # Reply to user
-    await update.message.reply_text(riya_reply)
+tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
+tg_app.add_handler(CommandHandler("start", start))
+tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Setup Telegram application
-app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
-app_telegram.add_handler(CommandHandler("start", start))
-app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# Run the Telegram bot
 async def run_bot():
-    await app_telegram.initialize()
-    await app_telegram.start()
-    logger.info("Riya is now live! 💃")
-    await app_telegram.updater.start_polling()
-    await app_telegram.updater.idle()
+    await tg_app.initialize()
+    await tg_app.start()
+    logger.info("Riya bot started ✅")
+    await tg_app.updater.start_polling()
+    await tg_app.updater.idle()
 
-import asyncio
 asyncio.create_task(run_bot())
