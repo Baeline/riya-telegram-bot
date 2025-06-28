@@ -11,7 +11,7 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters
 )
-from langdetect import detect
+from langdetect import detect, DetectorFactory
 import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -23,17 +23,17 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("riya-bot")
 
 # -------------------------------------------------
-# Environment variables (Railway → Settings → Variables)
+# Env variables (Railway)
 # -------------------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")  # minified JSON string
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
 if not all([BOT_TOKEN, OPENAI_API_KEY, GOOGLE_CREDS_JSON]):
-    raise RuntimeError("Missing env vars: BOT_TOKEN, OPENAI_API_KEY, GOOGLE_CREDS_JSON")
+    raise RuntimeError("Missing env vars!")
 
 # -------------------------------------------------
-# Initialise OpenAI & Google Sheets
+# Init OpenAI & Google Sheets
 # -------------------------------------------------
 openai.api_key = OPENAI_API_KEY
 
@@ -42,10 +42,10 @@ scope = [
     "https://www.googleapis.com/auth/drive",
 ]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDS_JSON), scope)
-sh = gspread.authorize(creds).open("Riya Conversations").sheet1
+sheet = gspread.authorize(creds).open("Riya Conversations").sheet1
 
 # -------------------------------------------------
-# FastAPI (for Railway health check)
+# FastAPI (health check)
 # -------------------------------------------------
 app = FastAPI()
 
@@ -56,27 +56,27 @@ async def health():
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
-def detect_lang_safe(text: str) -> str:
-    """Detect language code like 'en', 'hi', 'so', 'sw', etc."""
+DetectorFactory.seed = 0  # makes langdetect stable
+
+def detect_lang(text: str) -> str:
     try:
         return detect(text)
     except Exception:
         return "en"
 
 def generate_reply(user_msg: str, lang: str) -> str:
-    system_prompt = "You're Riya, a flirty AI girlfriend who mirrors the user's vibe."
-
-    if lang in {"hi", "so", "sw"}:
-        system_prompt += " Speak in Hinglish or desi language with emojis, slang and sweet teasing tone."
+    system_prompt = "You're Riya, a flirty, emotional AI girlfriend who mirrors the user's vibe."
+    if lang == "hi":
+        system_prompt += " Use Hinglish, cute desi slang, sweet chaos."
     else:
-        system_prompt += " Speak in Gen Z English – flirty, witty, playful and meme-like."
+        system_prompt += " Use Gen-Z flirty English, memes, and sass."
 
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
-        ]
+        ],
     )
     return response.choices[0].message.content.strip()
 
@@ -84,30 +84,33 @@ def generate_reply(user_msg: str, lang: str) -> str:
 # Telegram Handlers
 # -------------------------------------------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Heyyy I’m Riya 😘 Let’s chat — first few messages are free!")
+    await update.message.reply_text("Hey you 😘 I'm Riya. First 2 days are free. Talk to me 💬")
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text.strip()
-
-    lang = detect_lang_safe(user_text)
+    lang = detect_lang(user_text)
     reply = generate_reply(user_text, lang)
+
+    print(f"[DEBUG] user_id={user_id}, lang={lang}, msg='{user_text}'")
+    print(f"[DEBUG] reply: {reply}")
 
     await update.message.reply_text(reply)
 
+    # Log conversation
     try:
-        sh.append_row([
+        sheet.append_row([
             datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            str(user_id),
+            user_id,
             lang,
             user_text,
             reply,
         ])
     except Exception as e:
-        logger.error("❌ Failed to log to sheet: %s", e)
+        logger.error("Failed to log to sheet: %s", e)
 
 # -------------------------------------------------
-# Telegram App Setup
+# Telegram App
 # -------------------------------------------------
 telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", cmd_start))
@@ -120,8 +123,8 @@ async def telegram_main():
     await telegram_app.run_polling()
 
 # -------------------------------------------------
-# Run both FastAPI and Telegram using thread
+# Run Telegram bot alongside FastAPI
 # -------------------------------------------------
 @app.on_event("startup")
-def launch_bot():
+def start_bot():
     Thread(target=lambda: asyncio.run(telegram_main()), daemon=True).start()
