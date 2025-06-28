@@ -91,34 +91,31 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hey you 😘 I’m Riya – chat with me. First 2 days are free!")
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        logger.error("⚠️ update.message is None")
+        return
+
+    user_id = update.effective_user.id
+    user_text = update.message.text
+    logger.info(f"📩 User {user_id} said: {user_text}")
+
+    lang = detect_lang_safe(user_text)
+    reply = generate_reply(user_text, lang)
+
+    await update.message.reply_text(reply)
+
+    # Google Sheets logging
     try:
-        user_id = update.effective_user.id
-        user_text = update.message.text
-        logger.info(f"📩 New message from {user_id}: {user_text}")
-
-        lang = detect_lang_safe(user_text)
-        logger.info(f"🌐 Language detected: {lang}")
-
-        reply = generate_reply(user_text, lang)
-        logger.info(f"💬 Riya's reply: {reply}")
-
-        await update.message.reply_text(reply)
-
-        # Log to sheet
-        try:
-            sh.append_row([
-                datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                user_id,
-                lang,
-                user_text,
-                reply,
-            ])
-            logger.info("✅ Logged to Google Sheet")
-        except Exception as e:
-            logger.error(f"❌ Failed to log to sheet: {e}")
-
+        sh.append_row([
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            user_id,
+            lang,
+            user_text,
+            reply,
+        ])
     except Exception as e:
-        logger.error(f"❌ Message handling failed: {e}")
+        logger.error(f"❌ Logging failed: {e}")
+
 
 # -------------------------------------------------
 # Telegram setup
