@@ -117,11 +117,11 @@ tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-async def run_bot():
+async def main():
     await tg_app.initialize()
     await tg_app.start()
     logger.info("Riya bot started ✅")
     await tg_app.run_polling()
 
-asyncio.run(run_bot())
-
+if __name__ == "__main__":
+    asyncio.run(main())
