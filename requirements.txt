@@ -3,3 +3,6 @@ uvicorn
 python-telegram-bot==20.3
 langdetect
 openai>=1.0.0
+gspread
+oauth2client
+  
