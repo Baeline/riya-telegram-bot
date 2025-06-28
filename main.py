@@ -1,31 +1,61 @@
 import os
-import openai
-from fastapi import FastAPI, Request
+import logging
 from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from fastapi import FastAPI, Request
+import openai
 
-# Load environment variables
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
 
-# Initialize Telegram application
+openai.api_key = OPENAI_API_KEY
 bot = Bot(BOT_TOKEN)
-application = Application.builder().token(BOT_TOKEN).build()
 
 # FastAPI app
 app = FastAPI()
 
-# Telegram command handler
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hey cutie 😘 Riya is LIVE, let’s get flirty!")
+# Telegram bot application
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-application.add_handler(CommandHandler("start", start))
+# Reply generator using OpenAI
+async def generate_reply(prompt):
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You're Riya — a flirty, sassy, desi girlfriend. Speak in Hinglish, mirror user's tone. Keep it spicy."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    return response.choices[0].message.content.strip()
 
-# Webhook route for Telegram
+# Telegram message handler
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    reply = await generate_reply(user_text)
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=reply)
+
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+# Webhook route
 @app.post("/webhook")
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, bot)
-    await application.process_update(update)
+async def webhook(request: Request):
+    json_data = await request.json()
+    update = Update.de_json(json_data, bot)
+    await telegram_app.process_update(update)
     return {"ok": True}
+
+# Health check
+@app.get("/")
+async def root():
+    return {"status": "Riya is slaying 💅"}
+
+# Run Telegram bot polling (not needed in webhook mode, just for local testing)
+if __name__ == "__main__":
+    import uvicorn
+    logger.info("Starting Riya on port 8080...")
+    uvicorn.run("main:app", host="0.0.0.0", port=8080)
