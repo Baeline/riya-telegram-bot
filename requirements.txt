@@ -5,4 +5,3 @@ langdetect
 openai>=1.0.0
 gspread
 oauth2client
-  
