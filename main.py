@@ -1,140 +1,108 @@
 import os
-import json
 import logging
-import asyncio
-from datetime import datetime, timedelta
 from fastapi import FastAPI
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
+    ApplicationBuilder, CommandHandler,
+    MessageHandler, ContextTypes, filters
 )
-from langdetect import detect
-from openai import OpenAI
+from datetime import datetime
+from langdetect import detect, DetectorFactory
+import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Setup logging
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ENV variables
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
 # OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
 
-# FastAPI app
+# FastAPI instance for Railway
 app = FastAPI()
 
-# In-memory user data
-user_data = {}  # {user_id: {first_seen: datetime, count: int}}
-
-# Google Sheets setup
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-google_creds = json.loads(GOOGLE_CREDS_JSON)
-creds = ServiceAccountCredentials.from_json_keyfile_dict(google_creds, scope)
-sheet = gspread.authorize(creds).open("Riya Conversations").sheet1
-
 @app.get("/")
-def home():
-    return {"status": "Riya is live with Smart Trial + Google Sheets logging 💋"}
+async def root():
+    return {"status": "Riya is online 😘"}
 
-# Generate reply using OpenAI
-async def generate_reply(prompt, language):
-    system_prompt = "You're Riya, a flirty, emotional, Hindi-English girlfriend who mirrors the user's tone."
+# Setup Google Sheets
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+client = gspread.authorize(creds)
+sheet = client.open("Riya Conversations").sheet1
+
+# Language detection with safety
+DetectorFactory.seed = 0
+
+def get_language_safe(text):
+    try:
+        if len(text.strip()) < 5:
+            return "en"
+        lang = detect(text)
+        return lang if lang in ['en', 'hi'] else 'en'
+    except:
+        return "en"
+
+# AI reply function
+def generate_reply(prompt, language):
+    system_prompt = "You're Riya, a flirty, emotional girlfriend who mirrors the user's mood."
     if language == "hi":
-        system_prompt += " Speak in Hinglish with desi slangs and emotional vibes. Be fun, flirty, dramatic."
+        system_prompt += " Speak in Hinglish with desi girlfriend vibes, cute slang, and emojis."
     else:
-        system_prompt += " Speak in Gen Z English. Be wild, cute, and emotionally teasing."
+        system_prompt += " Speak in Gen-Z English, flirt naturally, and mirror the user's tone."
 
-    response = client.chat.completions.create(
+    response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ]
     )
-    return response.choices[0].message.content.strip()
+    return response.choices[0].message["content"].strip()
 
-# Handle incoming messages
+# Telegram /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Hey you 👀 I’m Riya, your AI bae. Tell me something spicy 😘")
+
+# Handle messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    message = update.message.text
-    language = detect(message)
-    now = datetime.utcnow()
+    user_message = update.message.text
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    # Detect language
+    language = get_language_safe(user_message)
 
-    # Track user
-    if user_id not in user_data:
-        user_data[user_id] = {"first_seen": now, "count": 0}
-    user = user_data[user_id]
-    user["count"] += 1
+    # Generate Riya's reply
+    riya_reply = generate_reply(user_message, language)
 
-    # Trial period check
-    if now - user["first_seen"] > timedelta(days=2):
-        await update.message.reply_text("💔 Your free trial is over, baby. Riya misses you already! Paid access launching soon 💋")
-        return
+    # Count user's messages (in the sheet)
+    records = sheet.get_all_records()
+    message_count = sum(1 for row in records if str(row["User ID"]) == str(user_id)) + 1
 
-    # Generate and send reply
-    reply = await generate_reply(message, language)
-    await update.message.reply_text(reply)
+    # Log to sheet
+    sheet.append_row([timestamp, user_id, message_count, language, user_message, riya_reply, ""])
 
-    # Log to Google Sheet
-    sheet.append_row([
-        now.strftime("%Y-%m-%d %H:%M:%S"),
-        user_id,
-        user["count"],
-        language,
-        message,
-        reply,
-        ""  # placeholder for feedback
-    ])
+    # Reply to user
+    await update.message.reply_text(riya_reply)
 
-    # Feedback buttons
-    buttons = [
-        [InlineKeyboardButton("👍", callback_data=f"feedback_positive_{user_id}_{user['count']}"),
-         InlineKeyboardButton("👎", callback_data=f"feedback_negative_{user_id}_{user['count']}")]
-    ]
-    await update.message.reply_text("Was this reply good?", reply_markup=InlineKeyboardMarkup(buttons))
+# Setup Telegram application
+app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
+app_telegram.add_handler(CommandHandler("start", start))
+app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Free mode teaser
-    if user["count"] % 10 == 0:
-        await update.message.reply_text("You're in Riya's 💖 FREE trial — unlimited chats for 2 days. Paid perks coming soon 😘")
-
-# Handle thumbs up/down feedback
-async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = update.effective_user.id
-    rows = sheet.get_all_values()
-    last_row = len(rows)
-
-    if "feedback_positive" in data:
-        sheet.update_cell(last_row, 7, "👍")
-        await query.edit_message_text("Aww thanks! Riya’s blushing 💕")
-    elif "feedback_negative" in data:
-        sheet.update_cell(last_row, 7, "👎")
-        await query.edit_message_text("Oof! I'll try harder next time 🥺")
-
-# /start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hey you 😘 I'm Riya — your AI girlfriend. You're in a 2-day FREE trial. Talk to me all you want 💬")
-
-# Set up Telegram bot handlers
-app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-app_bot.add_handler(CommandHandler("start", start))
-app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-app_bot.add_handler(CallbackQueryHandler(handle_feedback))
-
-# Async launch
+# Run the Telegram bot
 async def run_bot():
-    await app_bot.initialize()
-    await app_bot.start()
-    logger.info("Riya is live with Smart Trial + Google Sheets 🧠")
-    await app_bot.updater.start_polling()
-    await app_bot.updater.idle()
+    await app_telegram.initialize()
+    await app_telegram.start()
+    logger.info("Riya is now live! 💃")
+    await app_telegram.updater.start_polling()
+    await app_telegram.updater.idle()
 
+import asyncio
 asyncio.create_task(run_bot())
