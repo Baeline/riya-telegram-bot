@@ -1,104 +1,98 @@
-from pathlib import Path
-
-# Re-define the fixed main.py after kernel reset
-final_main_py = """
-import os
-import logging
+import os, json, logging, asyncio
+from datetime import datetime
 from fastapi import FastAPI
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-import openai
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters
+)
+import openai, gspread
 from langdetect import detect
-import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Logging setup
+# ── ENV ─────────────────────────────────────────────────────────
+BOT_TOKEN        = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
+GOOGLE_CREDS_RAW = os.getenv("GOOGLE_CREDS_JSON")   # full JSON string
+
+# ── LOGGING ─────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("riya-bot")
 
-# Load environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
-
-# Set OpenAI key
+# ── OPENAI ──────────────────────────────────────────────────────
 openai.api_key = OPENAI_API_KEY
 
-# FastAPI app for health checks
-app = FastAPI()
-
-@app.get("/")
-async def root():
-    return {"message": "Riya is up and running!"}
-
-# Authenticate Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(eval(GOOGLE_CREDS_JSON), scope)
-client = gspread.authorize(creds)
-
-# Open sheet safely
+# ── GOOGLE SHEET ────────────────────────────────────────────────
+sheet = None
 try:
-    sheet = client.open("Riya Conversations").sheet1
+    scope  = ["https://spreadsheets.google.com/feeds",
+              "https://www.googleapis.com/auth/drive"]
+    creds  = ServiceAccountCredentials.from_json_keyfile_dict(
+                json.loads(GOOGLE_CREDS_RAW), scope)
+    client = gspread.authorize(creds)
+    sheet  = client.open("Riya Conversations").sheet1   # exact name!
+    logger.info("✅ Connected to Google Sheet")
 except Exception as e:
-    logger.error(f"❌ Google Sheet Error: {e}")
-    sheet = None
+    logger.warning(f"Sheet disabled → {e}")
 
-# Generate reply using OpenAI
-def generate_reply(prompt, language):
-    system_prompt = "You're Riya, a bilingual, flirty girlfriend who mirrors user's mood."
+# ── FASTAPI (Railway health-check) ──────────────────────────────
+app = FastAPI()
+@app.get("/")
+def ping():
+    return {"status": "Riya is alive 💋"}
 
-    if language == "hi":
-        system_prompt += " Speak in Hinglish with Hindi slang and affectionate tone."
-    else:
-        system_prompt += " Speak in playful Gen-Z English. Add emojis only if user does."
+# ── GPT REPLY ───────────────────────────────────────────────────
+def gpt_reply(text:str, lang:str)->str:
+    system = (
+        "You're Riya, a flirty, emotional Gen-Z girlfriend. "
+        "Mirror the user's tone. If user writes Hinglish/Hindi, reply Hinglish; "
+        "otherwise Gen-Z English. Keep it playful and concise."
+    )
+    if lang == "hi":
+        system += " Use desi slang and cute roasts."
 
-    response = openai.ChatCompletion.create(
+    res = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return response.choices[0].message.content.strip()
+            {"role":"system","content":system},
+            {"role":"user"  ,"content":text}
+        ])
+    return res.choices[0].message.content.strip()
 
-# Handle start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ── TELEGRAM HANDLERS ───────────────────────────────────────────
+async def cmd_start(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hey babe 😘 Riya is online!")
 
-# Handle messages
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_msg = update.message.text
-    user_id = update.message.from_user.id
-    lang = detect(user_msg)
-    logger.info(f"Message from {user_id}: {user_msg} | Lang: {lang}")
+async def on_msg(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
+    txt  = update.message.text or ""
+    uid  = update.effective_user.id
+    lang = "en"
+    try: lang = detect(txt)
+    except: pass
 
     try:
-        reply = generate_reply(user_msg, lang)
+        reply = gpt_reply(txt, lang)
     except Exception as e:
-        logger.error(f"OpenAI error: {e}")
+        logger.error(f"GPT error: {e}")
         reply = "Oops babe, I zoned out 😵"
 
     await update.message.reply_text(reply)
 
     if sheet:
         try:
-            sheet.append_row([update.message.date.isoformat(), user_id, "", lang, user_msg, reply, ""])
+            sheet.append_row([
+                datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                str(uid), "", lang, txt, reply, ""
+            ])
         except Exception as e:
             logger.warning(f"Sheet write failed: {e}")
 
-# Set up Telegram bot
-app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-app_bot.add_handler(CommandHandler("start", start))
-app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+# ── TELEGRAM APP ────────────────────────────────────────────────
+bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
+bot_app.add_handler(CommandHandler("start", cmd_start))
+bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_msg))
 
+# ── START POLLING WHEN CONTAINER BOOTS ─────────────────────────
 @app.on_event("startup")
-async def startup():
-    import asyncio
-    asyncio.create_task(app_bot.run_polling())
-"""
-
-# Save to file
-main_path = Path("/mnt/data/main.py")
-main_path.write_text(final_main_py)
-
-main_path.name
+async def startup_event():
+    asyncio.create_task(bot_app.run_polling())
