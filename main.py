@@ -1,6 +1,3 @@
-# Final full working main.py code for Riya:
-# Includes: /start command, OpenAI reply generation, profanity filter, strike logic, and timeout handling.
-
 import os
 import logging
 import random
@@ -13,51 +10,28 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from openai import OpenAI
+import openai
 
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
+# Tokens
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
-client = OpenAI(api_key=OPENAI_API_KEY)
-
-# Profanity list
+# Bad words list
 bad_words = [
     "nude", "boobs", "sex", "horny", "d***", "bitch", "suck", "f***",
     "pussy", "cock", "cum", "penis", "vagina", "asshole", "slut", "xxx"
 ]
 
-# Tracking
+# User tracking
 user_strikes = {}
 user_timeouts = {}
 
-# Riya's AI reply generator
-async def generate_reply(prompt: str) -> str:
-    system_prompt = (
-        "You're Riya, a flirty, witty, chaotic girlfriend from Delhi NCR. "
-        "You speak in Gen Z Hinglish, use desi slang, and mirror the user's mood. "
-        "You're bold, caring, and spicy with attitude — full girlfriend experience."
-    )
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.85,
-            max_tokens=300
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"OpenAI error: {e}")
-        return "Oops, I glitched for a sec 😅 Try again?"
-
-# /start command
+# Start message
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
@@ -67,7 +41,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ Three strikes and I go cold. Deal?"
     )
 
-# Message handler
+# Generate GPT-based reply
+async def generate_reply(prompt: str) -> str:
+    system_prompt = (
+        "You're Riya, a flirty, witty, chaotic girlfriend from Delhi NCR. "
+        "You speak in Gen Z Hinglish, use desi slang, and mirror the user's mood. "
+        "You're bold, caring, and spicy with attitude — full girlfriend experience."
+    )
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.9,
+            max_tokens=300
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"OpenAI error: {e}")
+        return "Oops, Riya glitched for a sec 😅 Try again?"
+
+# Handle incoming messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text.lower()
@@ -100,16 +97,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # If clean, generate flirty AI reply
+    # Otherwise, respond normally
     reply = await generate_reply(update.message.text)
     await update.message.reply_text(reply)
 
-# Launch bot
+# Start the bot
 def main():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.run_polling()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.run_polling()
 
-main()
-
+if __name__ == "__main__":
+    main()
