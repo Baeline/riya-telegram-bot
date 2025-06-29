@@ -67,15 +67,19 @@ async def on_msg(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
     txt  = update.message.text or ""
     uid  = update.effective_user.id
     lang = "en"
-    try: lang = detect(txt)
-    except: pass
+    try:
+        lang = detect(txt)
+    except Exception as e:
+        logger.warning(f"🌐 Lang detect failed: {e}")
 
-  try:
-    reply = gpt_reply(txt, lang)
-except Exception as e:
-    logger.error(f"❌ GPT error: {e}")
-    reply = "Oops babe, I zoned out 😵"
+    logger.info(f"📝 User: {uid} | Msg: {txt} | Lang: {lang}")
 
+    try:
+        reply = gpt_reply(txt, lang)
+        logger.info(f"💬 GPT replied: {reply}")
+    except Exception as e:
+        logger.error(f"❌ GPT error: {e}")
+        reply = "Oops babe, I zoned out 😵"
 
     await update.message.reply_text(reply)
 
