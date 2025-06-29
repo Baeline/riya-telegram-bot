@@ -1,3 +1,6 @@
+# Final full working main.py code for Riya:
+# Includes: /start command, OpenAI reply generation, profanity filter, strike logic, and timeout handling.
+
 import os
 import logging
 import random
@@ -10,13 +13,17 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from openai import OpenAI
 
-# Logging setup
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# BOT TOKEN
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # or replace with your actual token string
+# Load environment variables
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Profanity list
 bad_words = [
@@ -28,7 +35,29 @@ bad_words = [
 user_strikes = {}
 user_timeouts = {}
 
-# START COMMAND
+# Riya's AI reply generator
+async def generate_reply(prompt: str) -> str:
+    system_prompt = (
+        "You're Riya, a flirty, witty, chaotic girlfriend from Delhi NCR. "
+        "You speak in Gen Z Hinglish, use desi slang, and mirror the user's mood. "
+        "You're bold, caring, and spicy with attitude — full girlfriend experience."
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.85,
+            max_tokens=300
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"OpenAI error: {e}")
+        return "Oops, I glitched for a sec 😅 Try again?"
+
+# /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
@@ -38,12 +67,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ Three strikes and I go cold. Deal?"
     )
 
-# MESSAGE HANDLER
+# Message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text.lower()
 
-    # If user is in timeout
+    # Timeout check
     if user_id in user_timeouts and datetime.now() < user_timeouts[user_id]:
         await update.message.reply_text(
             "I told you once. You crossed the line. Come back in a few hours (or never 😌)."
@@ -71,15 +100,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # Normal response
-    await update.message.reply_text("Hmm okay 👀 Tell me more...")
+    # If clean, generate flirty AI reply
+    reply = await generate_reply(update.message.text)
+    await update.message.reply_text(reply)
 
-# MAIN FUNCTION
+# Launch bot
 def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.run_polling()
 
-if __name__ == "__main__":
-    main()
+main()
+
