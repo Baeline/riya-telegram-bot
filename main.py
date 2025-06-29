@@ -82,7 +82,7 @@ async def generate_riya_reply(prompt: str) -> str:
     "No poetry. No therapy voice. Real banter, inside jokes, voice of a real Gen-Z girlfriend."
 )
 
-    )
+    
     try:
         resp = openai.ChatCompletion.create(
             model       = "gpt-3.5-turbo",
