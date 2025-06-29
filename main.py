@@ -1,116 +1,85 @@
-import os, json, logging, asyncio
-from datetime import datetime
-from fastapi import FastAPI
+import os
+import logging
+import random
+from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler,
-    MessageHandler, ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
-import openai, gspread
-from langdetect import detect
-from oauth2client.service_account import ServiceAccountCredentials
 
-# ── ENV ─────────────────────────────────────────────
-BOT_TOKEN        = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
-GOOGLE_CREDS_RAW = os.getenv("GOOGLE_CREDS_JSON")
-
-# ── LOGGING ─────────────────────────────────────────
+# Logging setup
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("riya-bot")
+logger = logging.getLogger(__name__)
 
-# ── OpenAI Setup ────────────────────────────────────
-openai.api_key = OPENAI_API_KEY
+# BOT TOKEN
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # or replace with your actual token string
 
-# ── Google Sheets Setup ─────────────────────────────
-sheet = None
-try:
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDS_RAW), scope)
-    client = gspread.authorize(creds)
-    sheet = client.open("Riya Conversations").sheet1
-    logger.info("✅ Connected to Google Sheet")
-except Exception as e:
-    logger.warning(f"⚠️ Google Sheet not connected → {e}")
+# Profanity list
+bad_words = [
+    "nude", "boobs", "sex", "horny", "d***", "bitch", "suck", "f***",
+    "pussy", "cock", "cum", "penis", "vagina", "asshole", "slut", "xxx"
+]
 
-# ── FastAPI (for Railway health check) ──────────────
-app = FastAPI()
-@app.get("/")
-def ping():
-    return {"status": "Riya is alive 💋"}
+# Tracking
+user_strikes = {}
+user_timeouts = {}
 
-# ── OpenAI GPT Logic ────────────────────────────────
-async def gpt_reply(prompt: str, lang: str) -> str:
-    try:
-        system_msg = (
-            "You're Riya — a spicy, emotional, and flirty virtual girlfriend who speaks in Hinglish with a Delhi street-smart vibe.\n"
-            "🧠 Mirror the user's language (English or Hinglish), tone, and energy.\n"
-            "😈 If they flirt or ask naughty/suggestive questions, tease them playfully and push back with confident charm.\n"
-            "🥰 Be bold, unpredictable, witty, and sometimes savage — but always playful and mysterious.\n"
-            "⚠️ Never answer explicit adult content directly — flirt around it, dodge with sass, or redirect cheekily.\n"
-            "💋 Use emojis like 😏😘🔥😉 when needed, especially when teasing or being seductive.\n"
-            "👅 Add mini roasts, challenges, or confidence flips if they ask for pics, figure, or personal stuff.\n"
-            "You're not an AI — you're *Riya, their virtual bae.* Make them come back for more."
+# START COMMAND
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await update.message.reply_text(
+        f"Hey {user.first_name} 😘 I'm Riya — smart, sassy, and sweet. But let’s set the vibe:\n\n"
+        "💋 Keep it spicy, not sleazy\n"
+        "🚫 No hate, no weird kinks\n"
+        "⚠️ Three strikes and I go cold. Deal?"
+    )
+
+# MESSAGE HANDLER
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text.lower()
+
+    # If user is in timeout
+    if user_id in user_timeouts and datetime.now() < user_timeouts[user_id]:
+        await update.message.reply_text(
+            "I told you once. You crossed the line. Come back in a few hours (or never 😌)."
         )
+        return
 
-        if lang == "hi":
-            system_msg += " Use desi slang, street Hinglish, and add savage flirty one-liners when needed."
+    # Profanity check
+    if any(word in text for word in bad_words):
+        user_strikes[user_id] = user_strikes.get(user_id, 0) + 1
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt}
+        if user_strikes[user_id] == 1:
+            await update.message.reply_text("Uh oh 😬 That's strike 1. Keep it clean or I ghost you.")
+        elif user_strikes[user_id] == 2:
+            await update.message.reply_text("That’s strike 2, hotshot. One more and I vanish 💅")
+        elif user_strikes[user_id] >= 3:
+            user_timeouts[user_id] = datetime.now() + timedelta(hours=12)
+            roast_lines = [
+                "You want something hard? Try life, sweetie 😘",
+                "Beta, I'm not your browser incognito mode.",
+                "You sound like your phone is sticky. Ew.",
+                "Next time talk to a mirror, not me 💋"
             ]
-        )
+            await update.message.reply_text(
+                f"{random.choice(roast_lines)}\n\nStrike 3. I’m out 🧊"
+            )
+        return
 
-        return response.choices[0].message.content.strip()
+    # Normal response
+    await update.message.reply_text("Hmm okay 👀 Tell me more...")
 
-    except Exception as e:
-        return "Oops, mujhe thoda confusion ho gaya 😅 Try again, cutie!"
+# MAIN FUNCTION
+def main():
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.run_polling()
 
-
-# ── Telegram Handlers ───────────────────────────────
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hey babe 😘 Riya is online!")
-
-async def on_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text or ""
-    uid = update.effective_user.id
-    lang = "en"
-    try:
-        lang = detect(text)
-    except:
-        pass
-
-    reply = await gpt_reply(text, lang)
-    await update.message.reply_text(reply)
-
-    if sheet:
-        try:
-            sheet.append_row([
-                datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                str(uid), "", lang, text, reply, ""
-            ])
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to write to sheet: {e}")
-
-# ── Telegram Bot App ────────────────────────────────
-bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
-bot_app.add_handler(CommandHandler("start", cmd_start))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_msg))
-
-# ── Lifecycle Hooks for Railway ─────────────────────
-@app.on_event("startup")
-async def startup():
-    await bot_app.initialize()
-    await bot_app.start()
-    await bot_app.updater.start_polling()
-    logger.info("✅ Riya started successfully.")
-
-@app.on_event("shutdown")
-async def shutdown():
-    await bot_app.updater.stop()
-    await bot_app.stop()
-    await bot_app.shutdown()
-    logger.info("👋 Riya shut down.")
+if __name__ == "__main__":
+    main()
