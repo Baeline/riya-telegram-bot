@@ -2,6 +2,6 @@ fastapi
 uvicorn
 python-telegram-bot==20.3
 langdetect
-openai>=1.0.0
+openai==0.28.1
 gspread
 oauth2client
