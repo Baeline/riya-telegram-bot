@@ -70,11 +70,12 @@ async def on_msg(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
     try: lang = detect(txt)
     except: pass
 
-    try:
-        reply = gpt_reply(txt, lang)
-    except Exception as e:
-        logger.error(f"GPT error: {e}")
-        reply = "Oops babe, I zoned out 😵"
+  try:
+    reply = gpt_reply(txt, lang)
+except Exception as e:
+    logger.error(f"❌ GPT error: {e}")
+    reply = "Oops babe, I zoned out 😵"
+
 
     await update.message.reply_text(reply)
 
