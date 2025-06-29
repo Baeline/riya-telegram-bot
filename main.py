@@ -98,7 +98,9 @@ bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_msg))
 async def startup_event():
     await bot_app.initialize()
     await bot_app.start()
+    await bot_app.bot.delete_webhook(drop_pending_updates=True)  # 💥 THIS LINE
     await bot_app.updater.start_polling()
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
