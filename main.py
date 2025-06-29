@@ -95,4 +95,7 @@ bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_msg))
 # ── START POLLING WHEN CONTAINER BOOTS ─────────────────────────
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(bot_app.run_polling())
+    await bot_app.initialize()
+    await bot_app.start()
+    await bot_app.updater.start_polling()
+
