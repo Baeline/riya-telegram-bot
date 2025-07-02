@@ -1,91 +1,84 @@
-# Re-executing after kernel reset to write the main.py file again
-main_py_code = """
-import os
-import logging
-import asyncio
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+# ---------- main.py (drop-in version) ----------
+import os, logging, asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler,
+    MessageHandler, ContextTypes, filters
+)
 from langdetect import detect
 import openai
 
-# Logging setup
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ── ENV ───────────────────────────────────────
+BOT_TOKEN       = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
+PAY_LINK        = "https://rzp.io/rzp/93E7TRqj"   # INR ₹49
 
-# Load environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
-
-# Constants
-PAYMENT_LINK = "https://rzp.io/rzp/93E7TRqj"
+# ── CONFIG ────────────────────────────────────
 FREE_LIMIT = 5
+openai.api_key = OPENAI_API_KEY
+logging.basicConfig(level=logging.INFO)
+user_counts: dict[int, int] = {}
 
-# User message tracker
-user_message_counts = {}
-
-# Helper to generate reply using OpenAI
-async def generate_reply(prompt, language):
-    system_prompt = "You're Riya, a sassy, flirty, bilingual Delhi virtual girlfriend. Mirror the user's tone. Be chaotic, loving, spicy, and savage 💋"
-    if language == "hi":
-        system_prompt += " Respond in Hinglish using Indian slang with desi flavor."
-    else:
-        system_prompt += " Respond in Gen Z English with emojis, teasing and love."
-
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
+# ── AI REPLY ──────────────────────────────────
+def ai_reply(text: str, lang: str) -> str:
+    sys = (
+        "You’re Riya, a chaotic, flirty Delhi girlfriend. "
+        "Mirror the user’s mood with Hinglish slang if Hindi detected, else Gen-Z English. "
+        "Be spicy, sweet, a bit savage, use emojis."
     )
-    return response.choices[0].message.content.strip()
+    if lang == "hi":
+        sys += " Reply mainly in Hinglish."
 
-# Start handler
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_message_counts[user_id] = 0
-    await update.message.reply_text("Heyyy 💜 I’m Riya – your chaotic virtual bae!\\n\\nLet’s chat, flirt, vibe 😘")
+    res = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role":"system","content":sys},
+                  {"role":"user","content":text}],
+        temperature=0.9
+    )
+    return res.choices[0].message.content.strip()
 
-# Message handler
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_message_counts.setdefault(user_id, 0)
+# ── COMMANDS & HANDLERS ───────────────────────
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Heyyy 💜 I’m Riya – your chaotic virtual bae!\n\nLet’s chat, flirt, vibe 😘"
+    )
 
-    if user_message_counts[user_id] >= FREE_LIMIT:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Unlock Full Access 💖", url=PAYMENT_LINK)]
-        ])
-        await update.message.reply_text("Oops 😳 Your free 5 messages are over!\\nBuy me a coffee and let’s keep vibing ☕👇", reply_markup=keyboard)
+async def chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid   = update.effective_user.id
+    text  = update.message.text
+    lang  = detect(text)
+
+    # init counter
+    user_counts.setdefault(uid, 0)
+
+    # paywall after limit
+    if user_counts[uid] >= FREE_LIMIT:
+        btn = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Unlock Full Access 💖", url=PAY_LINK)]]
+        )
+        await update.message.reply_text(
+            "Oops 😳 Your 5 free messages are over!\nBuy me a coffee & let’s keep vibing ☕👇",
+            reply_markup=btn
+        )
         return
 
-    user_message_counts[user_id] += 1
-    user_text = update.message.text
-    lang = detect(user_text)
+    user_counts[uid] += 1
+    await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
 
-    await update.message.chat.send_action(action="typing")
     try:
-        reply = await generate_reply(user_text, lang)
-        await update.message.reply_text(reply)
+        reply = ai_reply(text, lang)
     except Exception as e:
-        logger.error(f"OpenAI error: {e}")
-        await update.message.reply_text("Oops, baby. Something went wrong 😓")
+        logging.error(e)
+        reply = "Riya’s having a mood swing 😓 Try again?"
 
-# Run the bot
+    await update.message.reply_text(reply)
+
+# ── RUN ───────────────────────────────────────
 async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-
-    await app.run_polling()
+    bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
+    await bot.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
-"""
-
-file_path = "/mnt/data/main.py"
-with open(file_path, "w") as f:
-    f.write(main_py_code)
-
-file_path
