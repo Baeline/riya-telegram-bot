@@ -110,8 +110,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Heyyy 💜 I'm Riya – your chaotic virtual bae!")
 
 
-"Let's chat, flirt, vibe 😘"
-)
+"Let's chat, flirt, vibe 😘")
 
 # Telegram bot startup
 async def main():
