@@ -1,7 +1,6 @@
 fastapi
 uvicorn
 python-telegram-bot[rate-limiter]==20.8
-
 langdetect
 openai==0.28.1
 gspread
