@@ -1,200 +1,172 @@
+# ---------- Baeline / Riya Telegram Bot ----------
+# Full, self-contained file: GPT chat + 5-msg limit + Razorpay Payment Link + Webhook unlock
+# -------------------------------------------------
+import os, logging, asyncio, hmac, hashlib, json, requests
+from collections import defaultdict
 
-import os, json, logging, hmac, hashlib, requests
-from fastapi import FastAPI, Request
-from langdetect import detect
-from threading import Thread
-app = FastAPI()
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from fastapi import FastAPI, Request, HTTPException
+from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
+    Application, AIORateLimiter,
+    CommandHandler, MessageHandler, filters
 )
-
 import openai
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
-
-# ────────────────────────────────────────────────────────────────
-# ▶︎ ENVIRONMENT
-# ────────────────────────────────────────────────────────────────
-BOT_TOKEN                = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY           = os.getenv("OPENAI_API_KEY")
-RAZORPAY_KEY_ID          = os.getenv("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET      = os.getenv("RAZORPAY_KEY_SECRET")
-RAZORPAY_WEBHOOK_SECRET  = os.getenv("RAZORPAY_WEBHOOK_SECRET")
-GOOGLE_CREDS_JSON        = os.getenv("GOOGLE_CREDS_JSON")
-FREE_LIMIT               = int(os.getenv("FREE_LIMIT", 5))
-PORT                     = int(os.getenv("PORT", 8000))
+# ── ENVIRONMENT ───────────────────────────────────
+BOT_TOKEN             = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
+RAZORPAY_KEY_ID       = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET   = os.getenv("RAZORPAY_KEY_SECRET")
+RAZORPAY_WEBHOOK_SIG  = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")  # optional
 
 openai.api_key = OPENAI_API_KEY
-logging.basicConfig(level=logging.INFO)
 
-# ────────────────────────────────────────────────────────────────
-# ▶︎ GLOBAL STATE
-# ────────────────────────────────────────────────────────────────
-user_sessions: dict[int, dict] = {}
-paid_users:    set[int]        = set()
+# ── STATE (in-memory; swap with DB/Redis later) ──
+message_count = defaultdict(int)   # {user_id: count}
+paid_users    = set()              # {user_id}
 
-# ────────────────────────────────────────────────────────────────
-# ▶︎ GOOGLE SHEET – conversation logging
-# ────────────────────────────────────────────────────────────────
-scope   = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds   = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDS_JSON), scope)
-client  = gspread.authorize(creds)
-sheet   = client.open("Riya Conversations").sheet1
-
-def log_to_sheet(user_id: int, user_msg: str, reply: str) -> None:
-    try:
-        sheet.append_row([str(user_id), user_msg, reply])
-    except Exception as exc:
-        logging.error(f"Google‑sheet log failed: {exc}")
-
-# ────────────────────────────────────────────────────────────────
-# ▶︎ RAZORPAY HELPERS
-# ────────────────────────────────────────────────────────────────
-ORDER_AMOUNT_PAISA = 49 * 100  # ₹49 → paisa
-
-def create_order(user_id: int) -> dict:
-    """Create Razorpay order and return the json response."""
-    rsp = requests.post(
-        "https://api.razorpay.com/v1/orders",
-        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
-        json={
-            "amount"         : ORDER_AMOUNT_PAISA,
-            "currency"       : "INR",
-            "receipt"        : f"tg_{user_id}",
-            "payment_capture": 1,
-        },
-        timeout=10,
-    )
-    rsp.raise_for_status()
-    return rsp.json()
-@app.post("/create_order")
-async def create_order_api(req: Request):
-    data = await req.json()
-    user_id = data.get("user_id")
-    if not user_id:
-        return {"error": "Missing user_id"}
-
-    order = create_order(user_id=int(user_id))
-    return order
-
-# ────────────────────────────────────────────────────────────────
-# ▶︎ OPENAI – generate Riya reply
-# ────────────────────────────────────────────────────────────────
-async def generate_reply(message: str, lang: str) -> str:
-    system_prompt = (
-        "You're Riya, the spicy AI girlfriend. Respond with sass & sweetness."  # base
-        + (" Speak in Hinglish with desi swag 💕" if lang == "hi" else " Use Gen‑Z flirt 😘")
-    )
-    rsp = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": message},
-        ],
-    )
-    return rsp.choices[0].message.content.strip()
-
-# ────────────────────────────────────────────────────────────────
-# ▶︎ TELEGRAM BOT SETUP (handlers only)
-# ────────────────────────────────────────────────────────────────
-telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Heyy I'm Riya 💋\nType anything & let's vibe!")
-
-async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_sessions.setdefault(user_id, {"count": 0})
-
-    # rate‑limit vs paid
-    if user_id not in paid_users and user_sessions[user_id]["count"] >= FREE_LIMIT:
-        await prompt_payment(update)
-        return
-    user_sessions[user_id]["count"] += 1
-
-    txt  = update.message.text
-    lang = detect(txt)
-    reply = await generate_reply(txt, lang)
-    await update.message.reply_text(reply)
-    log_to_sheet(user_id, txt, reply)
-
-async def on_callback(update: Update, _: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.data == "verify_payment":
-        await q.edit_message_text("🔄 Auto‑unlock is running! Payment will unlock chat within seconds ✨")
-
-telegram_app.add_handlers([
-    CommandHandler("start", cmd_start),
-    CallbackQueryHandler(on_callback),
-    MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
-])
-
-# ────────────────────────────────────────────────────────────────
-# ▶︎ FASTAPI APP (Telegram & Razorpay webhooks)
-# ────────────────────────────────────────────────────────────────
+# ── FASTAPI & PTB APP ─────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 app = FastAPI()
 
-@app.post("/telegram")
+tg_app = (
+    Application.builder()
+    .token(BOT_TOKEN)
+    .rate_limiter(AIORateLimiter())   # avoids Telegram 429s
+    .concurrent_updates(True)
+    .build()
+)
+
+# ── RAZORPAY HELPERS ─────────────────────────────
+def create_payment_link(amount_rupees: int, user_id: int) -> str | None:
+    """
+    Creates a Razorpay *Payment Link* and returns the short_url.
+    """
+    url  = "https://api.razorpay.com/v1/payment_links"
+    auth = (RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
+
+    payload = {
+        "amount"        : amount_rupees * 100,  # paise
+        "currency"      : "INR",
+        "description"   : f"Baeline access for Telegram user {user_id}",
+        "customer"      : {"name": "Baeline User", "email": "noreply@baeline.com"},
+        "notify"        : {"sms": False, "email": False},
+        "callback_url"  : "https://baeline.com/unlock",   # optional
+        "callback_method": "get",
+        "notes"         : {"user_id": str(user_id)},
+    }
+
+    try:
+        r = requests.post(url, auth=auth, json=payload, timeout=15)
+        r.raise_for_status()
+        return r.json()["short_url"]
+    except Exception as e:
+        logging.error(f"Payment-link error: {e}")
+        return None
+
+
+def verify_razorpay_signature(body: bytes, header: str) -> bool:
+    """
+    Optional: Razorpay webhook signature verification.
+    """
+    if not RAZORPAY_WEBHOOK_SIG:
+        return True  # skip if secret not set
+    digest = hmac.new(RAZORPAY_WEBHOOK_SIG.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, header)
+
+
+# ── BOT HANDLERS ─────────────────────────────────
+async def start_cmd(update: Update, _ctx):
+    await update.message.reply_text(
+        "Heyy, I’m Riya 😘 — you get *5 free messages*. After that it’s ₹49 to keep the sparks flying!"
+    )
+
+
+async def chat_handler(update: Update, _ctx):
+    user_id = update.effective_user.id
+
+    # Already paid? skip limit
+    if user_id not in paid_users:
+        message_count[user_id] += 1
+
+        if message_count[user_id] > 5:
+            link = create_payment_link(49, user_id)
+            if link:
+                await update.message.reply_text(
+                    "🛑 You’ve used your 5 free messages 💔\n\n"
+                    f"💸 *Unlock full access now — just ₹49*\n"
+                    f"[Tap to pay]({link})",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text("Payment link error. Try again in a bit!")
+            return  # block further chat until paid
+
+    # ----- OpenAI chat -----
+    prompt = update.message.text.strip()
+    try:
+        res = openai.ChatCompletion.create(
+            model       = "gpt-3.5-turbo",
+            temperature = 0.9,
+            messages    = [
+                {"role": "system", "content": "You’re Riya, an Indian flirty girlfriend. No chat history."},
+                {"role": "user",   "content": prompt}
+            ],
+            max_tokens  = 256,
+        )
+        reply = res.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"OpenAI error: {e}")
+        reply = "Oops, server hiccup! Try again in a moment."
+
+    await update.message.reply_text(reply)
+
+
+tg_app.add_handler(CommandHandler("start", start_cmd))
+tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
+
+# ── WEBHOOK ENDPOINTS ────────────────────────────
+@app.post(f"/webhook/{BOT_TOKEN}")
 async def telegram_webhook(req: Request):
+    """
+    Telegram pushes updates here.
+    """
     data = await req.json()
-    update = Update.de_json(data, telegram_app.bot)
-
-    if not telegram_app._initialized:
-        await telegram_app.initialize()
-
-    await telegram_app.process_update(update)
+    await tg_app.process_update(Update.de_json(data, tg_app.bot))
     return {"ok": True}
 
 
-@app.post("/razorpay/webhook")
+@app.post("/razorpay-webhook")
 async def razorpay_webhook(req: Request):
-    body      = await req.body()
-    signature = req.headers.get("X-Razorpay-Signature", "")
-    digest    = hmac.new(RAZORPAY_WEBHOOK_SECRET.encode(), msg=body, digestmod=hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(digest, signature):
-        return {"status": "invalid signature"}
+    """
+    Razorpay sends payment events here.
+    """
+    raw_body = await req.body()
+    sig      = req.headers.get("x-razorpay-signature", "")
 
-    payload = json.loads(body)
-    if payload.get("event") == "payment.captured":
-        receipt = payload["payload"]["payment"]["entity"].get("receipt", "")
-        if receipt.startswith("tg_"):
-            paid_users.add(int(receipt.split("_", 1)[1]))
-            logging.info("✔️  Auto‑unlocked user %s", receipt)
-            return {"status": "unlocked"}
-    return {"status": "ignored"}
+    # Signature check (optional but recommended)
+    if not verify_razorpay_signature(raw_body, sig):
+        logging.warning("⚠️  Invalid Razorpay signature")
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
-# ────────────────────────────────────────────────────────────────
-# ▶︎ PAYMENT PROMPT (Razorpay order link)
-# ────────────────────────────────────────────────────────────────
-async def prompt_payment(update: Update):
-    user_id = update.effective_user.id
-    order   = create_order(user_id)
-    pay_url = f"https://rzp.io/i/{order['id']}"
-    kb      = [[InlineKeyboardButton("💸 Unlock Full Access – ₹49", url=pay_url)]]
-    await update.message.reply_text(
-        "You’ve used your 5 free messages 💔\n\nWant more? 😉",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
+    payload = json.loads(raw_body)
+    event   = payload.get("event")
 
-# ────────────────────────────────────────────────────────────────
-# ▶︎ RUN via uvicorn (Railway start command)
-# ────────────────────────────────────────────────────────────────
-# Start the bot inside a background thread *once* FastAPI is live.
+    # We only care when the *payment link* is fully paid
+    if event == "payment_link.paid":
+        notes = payload["payload"]["payment_link"]["entity"]["notes"]
+        user  = int(notes.get("user_id", 0))
+        paid_users.add(user)
+        logging.info(f"✅ Payment captured for user {user}")
 
-async def start_bot():
-    await telegram_app.initialize()
-    await telegram_app.start()
-    logging.info("✅ Telegram bot started and initialized.")
-
-import asyncio
-asyncio.create_task(start_bot())
+    return {"status": "ok"}
 
 
-# Nothing else here. Railway launches with:
-# uvicorn main:app --host 0.0.0.0 --port ${PORT}
-
+# ── ENTRYPOINTS ──────────────────────────────────
+if __name__ == "__main__":
+    import sys, uvicorn, multiprocessing
+    if len(sys.argv) > 1 and sys.argv[1] == "poll":
+        tg_app.run_polling()
+    else:
+        workers = max(multiprocessing.cpu_count() // 2, 1)
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=workers)
