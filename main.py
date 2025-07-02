@@ -77,8 +77,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_conversation(user_id, text, reply)
     else:
         await update.message.reply_text(
-            "Oops! Your *5 free messages* are done 😢
-"
+            "Oops! Your *5 free messages* are done 😢"
+
             "Unlock unlimited flirting for just ₹49",
             parse_mode=constants.ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
