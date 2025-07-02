@@ -1,118 +1,103 @@
 from pathlib import Path
 
-# Clean and corrected version of main.py
+# Define the fixed code for main.py
 fixed_main_code = '''
 import os
 import logging
 import asyncio
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from openai import OpenAI
-import requests
-import json
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ContextTypes, filters
+)
+import openai
 
-# ENV Vars
+# ENV
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-RAZORPAY_SECRET = os.getenv("RAZORPAY_SECRET")
+RAZORPAY_LINK = "https://rzp.io/rzp/93E7TRqj"
 
-# Constants
-PAYMENT_LINK = "https://rzp.io/rzp/93E7TRqj"
-LOG_SHEET_URL = "https://sheet.best/api/sheets/xxxxxxxxxx"  # Replace if needed
-
-# Init
-app = FastAPI()
-openai = OpenAI(api_key=OPENAI_API_KEY)
+# Logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Memory Store
+# Initialize OpenAI
+openai.api_key = OPENAI_API_KEY
+
+# App init
+app = FastAPI()
 user_message_count = {}
 paid_users = set()
 
-# Riya Prompt
-def build_prompt(user_input):
-    return [
-        {"role": "system", "content": "You're Riya – Delhi’s sassiest virtual bae. You flirt, tease, comfort, and mirror tone. Keep it spicy but lovable."},
-        {"role": "user", "content": user_input}
-    ]
-
-# AI Reply
-async def generate_reply(user_input):
-    response = openai.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=build_prompt(user_input)
-    )
-    return response.choices[0].message.content.strip()
-
-# Start Command
+# Telegram Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Heyyy 💜 I’m Riya – your chaotic virtual bae!\n\nLet’s chat, flirt, vibe 😘")
+    user_id = update.effective_user.id
+    keyboard = [
+        [InlineKeyboardButton("💬 Start Chatting", callback_data="start_chat")],
+    ]
+    await update.message.reply_text(
+        "Heyyy 💜 I’m Riya – your chaotic virtual bae!\nLet’s chat, flirt, vibe 😘",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-# Razorpay Webhook Endpoint
-@app.post("/webhook")
-async def handle_payment_webhook(request: Request):
-    payload = await request.json()
-    logging.info("Webhook payload: %s", json.dumps(payload))
-    try:
-        if payload.get("event") == "payment.captured":
-            contact = payload["payload"]["payment"]["entity"]["email"]
-            if contact:
-                paid_users.add(contact)
-                logging.info(f"✅ Payment received and added: {contact}")
-    except Exception as e:
-        logging.error(f"Webhook error: {e}")
-    return {"status": "ok"}
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-# Message Handler
+    if query.data == "start_chat":
+        await query.edit_message_text("Yayy! Riya’s waiting... Say something 😘")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = update.message.text.strip()
 
-    # Check paid status
-    if user_id in paid_users:
-        pass
-    else:
-        count = user_message_count.get(user_id, 0)
-        if count >= 5:
-            keyboard = [
-                [InlineKeyboardButton("💸 Unlock More Chats", url=PAYMENT_LINK)]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("Your free chats are over 😭 Time to show me some love 💕", reply_markup=reply_markup)
-            return
-        user_message_count[user_id] = count + 1
+    if user_id not in user_message_count:
+        user_message_count[user_id] = 0
 
-    # Typing + Reply
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    reply = await generate_reply(text)
-    await update.message.reply_text(reply)
+    if user_id not in paid_users and user_message_count[user_id] >= 5:
+        keyboard = [[InlineKeyboardButton("💸 Unlock More", url=RAZORPAY_LINK)]]
+        await update.message.reply_text(
+            "Oopsie! Free chat limit over 🥺 Click below to unlock more flirty fun 💖",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
 
-    # Optional Logging
+    user_message_count[user_id] += 1
+    prompt = update.message.text
+
     try:
-        requests.post(LOG_SHEET_URL, json={
-            "user_id": user_id,
-            "message": text,
-            "reply": reply
-        })
-    except:
-        pass
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You’re Riya – flirty, chaotic, emotional, and sweet. Talk like a Delhi Gen Z girlfriend in Hinglish."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        reply = response.choices[0].message.content
+        await update.message.reply_text(reply)
+    except Exception as e:
+        logger.error(f"OpenAI error: {e}")
+        await update.message.reply_text("Riya's having a mood swing 💔 Try again!")
 
-# Telegram Bot Runner
+# Telegram Bot Setup
 async def main():
-    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    await app_bot.initialize()
-    await app_bot.start()
-    await app_bot.updater.start_polling()
-    await app_bot.idle()
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-loop = asyncio.get_event_loop()
-loop.create_task(main())
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    await application.run_polling()
+
+# Launch async
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 '''
 
-# Save to file
+# Save the fixed main.py file
 file_path = Path("/mnt/data/main.py")
 file_path.write_text(fixed_main_code)
 
