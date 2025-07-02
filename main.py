@@ -1,5 +1,4 @@
-# ---------- main.py (drop-in version) ----------
-import os, logging, asyncio
+import os, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler,
@@ -11,7 +10,7 @@ import openai
 # ── ENV ───────────────────────────────────────
 BOT_TOKEN       = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
-PAY_LINK        = "https://rzp.io/rzp/93E7TRqj"   # INR ₹49
+PAY_LINK        = "https://rzp.io/rzp/93E7TRqj"  # change if needed
 
 # ── CONFIG ────────────────────────────────────
 FREE_LIMIT = 5
@@ -48,10 +47,8 @@ async def chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text  = update.message.text
     lang  = detect(text)
 
-    # init counter
     user_counts.setdefault(uid, 0)
 
-    # paywall after limit
     if user_counts[uid] >= FREE_LIMIT:
         btn = InlineKeyboardMarkup(
             [[InlineKeyboardButton("Unlock Full Access 💖", url=PAY_LINK)]]
@@ -74,11 +71,8 @@ async def chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 # ── RUN ───────────────────────────────────────
-async def main():
+if __name__ == "__main__":
     bot = ApplicationBuilder().token(BOT_TOKEN).build()
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
-    await bot.run_polling()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    bot.run_polling()  # ← ✅ clean, no asyncio issues
