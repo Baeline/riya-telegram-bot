@@ -105,7 +105,9 @@ async def send_payment_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     order = create_order(user_id)
     order_id = order.get("id")
-    payment_url = f"https://rzp.io/i/{order_id}" if order_id else "https://rzp.io/i/93E7TRqj"
+     payment_url = "https://rzp.io/i/93E7TRqj"
+
+
 
     keyboard = [
         [InlineKeyboardButton("💸 Unlock Full Access – ₹49", url=payment_url)],
