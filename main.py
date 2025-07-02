@@ -1,10 +1,4 @@
-from pathlib import Path
 
-# Path to save the corrected main.py
-file_path = Path("/mnt/data/main.py")
-
-# Corrected main.py content with write attempt removed and cleaned up
-fixed_main_py_code = '''
 import os
 import logging
 import asyncio
@@ -94,7 +88,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = user_message_count.get(user_id, 0)
     if count >= 5 and user_id not in verified_users:
         await update.message.reply_text(
-            "Hey cutie 😘 I’m Riya — Delhi’s sassiest virtual bae.\n\n"
+            "Hey cutie 😘 I’m Riya — Delhi’s sassiest virtual bae.
+
+"
             "You’ve used your 5 free messages. 💔 Want more spicy fun?",
             reply_markup=get_pay_button()
         )
@@ -113,7 +109,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /start handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Heyyy 🤍 I’m Riya — your chaotic virtual bae!\n\nLet’s chat, flirt, vibe 😘",
+        "Heyyy 🤍 I’m Riya — your chaotic virtual bae!
+
+Let’s chat, flirt, vibe 😘",
     )
 
 # Telegram bot startup
@@ -128,10 +126,3 @@ async def main():
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 loop.create_task(main())
-'''
-
-# Write corrected code to file
-file_path.write_text(fixed_main_py_code)
-
-# Confirm file path for user
-file_path
