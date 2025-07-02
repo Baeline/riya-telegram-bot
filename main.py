@@ -2,14 +2,15 @@ import os, logging, json, requests, hmac, hashlib
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler,
-    MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ContextTypes, filters
 )
 from langdetect import detect
 import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from threading import Thread
+import uvicorn
 
 # ENV VARS
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -25,10 +26,10 @@ logging.basicConfig(level=logging.INFO)
 user_sessions = {}
 paid_users = set()
 
-# ✅ FastAPI App for webhook
+# ✅ FastAPI App
 app = FastAPI()
 
-# ✅ Google Sheet Logging
+# ✅ Google Sheets Auth
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDS_JSON), scope)
 client = gspread.authorize(creds)
@@ -40,7 +41,7 @@ def log_to_sheet(user_id, user_message, reply):
     except Exception as e:
         logging.error(f"Sheet log failed: {e}")
 
-# ✅ Razorpay Order API Logic
+# ✅ Razorpay Order Creation
 def create_order(user_id):
     url = "https://api.razorpay.com/v1/orders"
     data = {
@@ -56,12 +57,11 @@ def create_order(user_id):
     )
     return response.json()
 
-# ✅ Webhook Endpoint for Razorpay
+# ✅ Razorpay Webhook Endpoint
 @app.post("/razorpay/webhook")
 async def razorpay_webhook(request: Request):
     body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature")
-
     expected = hmac.new(
         bytes(RAZORPAY_WEBHOOK_SECRET, 'utf-8'),
         msg=body,
@@ -78,12 +78,13 @@ async def razorpay_webhook(request: Request):
             if "tg_" in receipt:
                 user_id = int(receipt.split("_")[1])
                 paid_users.add(user_id)
+                logging.info(f"✅ Payment auto-unlocked for user: {user_id}")
                 return {"status": "unlocked"}
     except Exception as e:
         logging.error(f"Webhook error: {e}")
     return {"status": "ignored"}
 
-# ✅ AI Response
+# ✅ OpenAI Response
 async def generate_reply(message, language):
     system_prompt = "You're Riya, a flirty, emotional AI girlfriend. Respond with sass and sweetness."
     if language == "hi":
@@ -105,9 +106,7 @@ async def send_payment_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     order = create_order(user_id)
     order_id = order.get("id")
-     payment_url = "https://rzp.io/i/93E7TRqj"
-
-
+    payment_url = f"https://rzp.io/i/{order_id}" if order_id else "https://rzp.io/l/fallback"
 
     keyboard = [
         [InlineKeyboardButton("💸 Unlock Full Access – ₹49", url=payment_url)],
@@ -118,7 +117,7 @@ async def send_payment_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ✅ Handlers
+# ✅ Telegram Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Heyy, I'm Riya 💋\nType anything to start chatting!")
 
@@ -148,10 +147,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "verify_payment":
         await query.edit_message_text("🔄 We’ve switched to auto-unlock via payment confirmation 💸\nPlease wait a few seconds after you pay ✨")
 
-# ✅ Run Bot
+# ✅ Launch both Telegram Webhook + FastAPI
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CallbackQueryHandler(callback_handler))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+async def set_webhook():
+    await telegram_app.bot.set_webhook("https://riya-telegram-bot-production.up.railway.app/telegram")
+
+telegram_app.initialize()
+telegram_app.post_init = set_webhook
+
+Thread(target=telegram_app.run_webhook, kwargs={
+    "listen": "0.0.0.0",
+    "port": int(os.getenv("PORT", 8000)),
+    "webhook_path": "/telegram"
+}).start()
+
 if __name__ == "__main__":
-    telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
-    telegram_app.add_handler(CommandHandler("start", start))
-    telegram_app.add_handler(CallbackQueryHandler(callback_handler))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    telegram_app.run_polling()
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
