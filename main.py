@@ -1,4 +1,4 @@
-```python
+
 import os, json, logging, hmac, hashlib, requests
 from fastapi import FastAPI, Request
 from langdetect import detect
