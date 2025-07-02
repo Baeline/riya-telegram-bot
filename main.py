@@ -132,8 +132,13 @@ app = FastAPI()
 async def telegram_webhook(req: Request):
     data = await req.json()
     update = Update.de_json(data, telegram_app.bot)
+
+    if not telegram_app._initialized:
+        await telegram_app.initialize()
+
     await telegram_app.process_update(update)
     return {"ok": True}
+
 
 @app.post("/razorpay/webhook")
 async def razorpay_webhook(req: Request):
