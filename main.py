@@ -69,6 +69,15 @@ def create_order(user_id: int) -> dict:
     )
     rsp.raise_for_status()
     return rsp.json()
+@app.post("/create_order")
+async def create_order_api(req: Request):
+    data = await req.json()
+    user_id = data.get("user_id")
+    if not user_id:
+        return {"error": "Missing user_id"}
+
+    order = create_order(user_id=int(user_id))
+    return order
 
 # ────────────────────────────────────────────────────────────────
 # ▶︎ OPENAI – generate Riya reply
