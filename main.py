@@ -68,8 +68,7 @@ def log_conversation(user_id, msg_count, lang, user_msg, riya_reply):
 
 # Start handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hey cutie 😘 I'm Riya – Delhi's sassiest virtual bae.
-Say hi and let's flirt 💋")
+    await update.message.reply_text("Hey cutie 😘 I'm Riya – Delhi's sassiest virtual bae.Say hi and let's flirt 💋")
 
 # Message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
