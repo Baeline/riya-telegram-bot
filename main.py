@@ -106,8 +106,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # /start handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Heyyy 🤍 I’m Riya — your chaotic virtual bae!
+    
+        await update.message.reply_text("Heyyy 💜 I'm Riya – your chaotic virtual bae!")
+
 
 Let’s chat, flirt, vibe 😘",
     )
