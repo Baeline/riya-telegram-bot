@@ -13,6 +13,7 @@ from telegram.ext import (
 import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+app = FastAPI()
 
 # ────────────────────────────────────────────────────────────────
 # ▶︎ ENVIRONMENT
