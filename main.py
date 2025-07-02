@@ -1,104 +1,82 @@
-from pathlib import Path
-
-# Define the fixed code for main.py
-fixed_main_code = '''
+# Creating the corrected version of main.py based on previous troubleshooting
+corrected_main_py = """
 import os
 import logging
 import asyncio
-from fastapi import FastAPI, Request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
-)
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from langdetect import detect
 import openai
-
-# ENV
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-RAZORPAY_LINK = "https://rzp.io/rzp/93E7TRqj"
 
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI
+# Load environment variables
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
-# App init
-app = FastAPI()
-user_message_count = {}
-paid_users = set()
+# Message limits
+FREE_LIMIT = 5
+user_message_counts = {}
 
-# Telegram Handlers
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    keyboard = [
-        [InlineKeyboardButton("💬 Start Chatting", callback_data="start_chat")],
-    ]
-    await update.message.reply_text(
-        "Heyyy 💜 I’m Riya – your chaotic virtual bae!\nLet’s chat, flirt, vibe 😘",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+# Generate reply using OpenAI
+def generate_reply(prompt, language):
+    system_prompt = "You're Riya, a chaotic, emotional, flirty, bilingual girlfriend who mirrors user's tone and language."
+
+    if language == "hi":
+        system_prompt += " Speak in Hinglish with cute desi slang, light roasts, and lots of girlfriend energy. Use emojis sparingly 💋."
+    else:
+        system_prompt += " Speak in Gen Z English with playful sass, emojis, and mood-based tone."
+
+    completion = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
     )
+    return completion.choices[0].message.content
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# Start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Heyyy 💜 I’m Riya – your chaotic virtual bae!\nLet’s chat, flirt, vibe 😘")
 
-    if query.data == "start_chat":
-        await query.edit_message_text("Yayy! Riya’s waiting... Say something 😘")
-
+# Handle messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    text = update.message.text
+    language = detect(text)
 
-    if user_id not in user_message_count:
-        user_message_count[user_id] = 0
-
-    if user_id not in paid_users and user_message_count[user_id] >= 5:
-        keyboard = [[InlineKeyboardButton("💸 Unlock More", url=RAZORPAY_LINK)]]
-        await update.message.reply_text(
-            "Oopsie! Free chat limit over 🥺 Click below to unlock more flirty fun 💖",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-
-    user_message_count[user_id] += 1
-    prompt = update.message.text
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You’re Riya – flirty, chaotic, emotional, and sweet. Talk like a Delhi Gen Z girlfriend in Hinglish."},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        reply = response.choices[0].message.content
+    count = user_message_counts.get(user_id, 0)
+    if count < FREE_LIMIT:
+        reply = generate_reply(text, language)
         await update.message.reply_text(reply)
-    except Exception as e:
-        logger.error(f"OpenAI error: {e}")
-        await update.message.reply_text("Riya's having a mood swing 💔 Try again!")
+        user_message_counts[user_id] = count + 1
+    else:
+        button = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Unlock Riya 💖", url="https://rzp.io/l/riyapass")]
+        ])
+        await update.message.reply_text("Oops! Free chats are over 😢 Unlock more time with me?", reply_markup=button)
 
-# Telegram Bot Setup
+# Main app
 async def main():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    await application.run_polling()
+    await app.run_polling()
 
-# Launch async
+# Run
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-'''
+    asyncio.run(main())
+"""
 
-# Save the fixed main.py file
-file_path = Path("/mnt/data/main.py")
-file_path.write_text(fixed_main_code)
+# Save to file
+file_path = "/mnt/data/main.py"
+with open(file_path, "w") as f:
+    f.write(corrected_main_py)
 
-file_path.name
+file_path
