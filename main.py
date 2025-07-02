@@ -1,122 +1,143 @@
+from pathlib import Path
 
+# Fixed main.py with indentation, webhook logging, emoji-safe strings, and Google Sheets support.
+main_py_code = """
 import os
-import json
 import logging
+import json
 import asyncio
 from datetime import datetime
 from fastapi import FastAPI, Request
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from langdetect import detect
+from openai import ChatCompletion, OpenAIError
 import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import hmac
-import hashlib
+import razorpay
 
 # Load environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 GOOGLE_CREDS_JSON = json.loads(os.getenv("GOOGLE_CREDS_JSON"))
+SPREADSHEET_NAME = "Riya Conversations"
+RAZORPAY_PAYMENT_LINK = "https://rzp.io/rzp/93E7TRqj"
 
-# Setup logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Setup OpenAI
+# OpenAI client
 openai.api_key = OPENAI_API_KEY
 
-# Setup Google Sheets
+# Google Sheets setup
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(GOOGLE_CREDS_JSON, scope)
-client = gspread.authorize(creds)
-sheet = client.open("Riya Conversations").sheet1
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(GOOGLE_CREDS_JSON, scope)
+gc = gspread.authorize(credentials)
+sheet = gc.open(SPREADSHEET_NAME).sheet1
 
-# Memory store
-user_messages = {}
+# Razorpay client (optional use)
+razorpay_client = razorpay.Client(auth=("rzp_test_dummy", "dummy_secret"))
+
+# Initialize FastAPI
+app = FastAPI()
+application = None
+
+# Memory stores
+user_msg_count = {}
 paid_users = set()
 
-# Razorpay payment link
-PAYMENT_LINK = "https://rzp.io/rzp/93E7TRqj"
+# --- UTILS ---
+def log_to_sheet(user_id, count, lang, user_msg, reply):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sheet.append_row([timestamp, str(user_id), str(count), lang, user_msg, reply])
 
-# Typing helper
-async def send_typing(context, chat_id):
-    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+def is_paid(user_id):
+    return str(user_id) in paid_users
 
-# Generate flirty replies
-def generate_reply(user_message, language="en"):
-    system_prompt = (
-        "You’re Riya, a sassy, emotional virtual girlfriend from Delhi. "
-        "You flirt, tease, and sometimes roast. Keep it spicy and desi. Respond only as her."
-    )
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message}
-        ]
-    )
-    return response['choices'][0]['message']['content'].strip()
+# --- OPENAI REPLY ---
+async def generate_reply(prompt, language):
+    system_prompt = "You're Riya – a sassy, flirty, bilingual AI girlfriend from Delhi. Speak in Gen Z tone. Emojis ON."
 
-# Save to Google Sheet
-def log_conversation(user_id, msg_count, lang, user_msg, riya_reply):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    sheet.append_row([now, user_id, msg_count, lang, user_msg, riya_reply])
+    if language == "hi":
+        system_prompt += " Use Hinglish, Bollywood-style drama, and desi GF energy with flirty emojis."
+    else:
+        system_prompt += " Use Gen Z English with emojis, sarcasm, and emotional validation."
 
-# Start handler
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.9
+        )
+        return response.choices[0].message["content"].strip()
+    except OpenAIError as e:
+        return "Oops! My brain is on vacation rn. Try again in a bit 🧠💤"
+
+# --- TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hey cutie 😘 I'm Riya – Delhi's sassiest virtual bae.Say hi and let's flirt 💋")
+    await update.message.reply_text("Hey cutie 😘 I'm Riya – Delhi's sassiest virtual bae.\nWanna flirt? Start texting 💋")
 
-# Message handler
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_message = update.message.text
-    user_messages.setdefault(user_id, []).append(user_message)
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
+    language = detect(text) if text else "en"
+    count = user_msg_count.get(user_id, 0) + 1
 
-    if user_id not in paid_users and len(user_messages[user_id]) > 5:
-        button = InlineKeyboardMarkup([[InlineKeyboardButton("Unlock 🔓", url=PAYMENT_LINK)]])
-        await update.message.reply_text("Your free messages are over 💔 Tap below to continue chatting with me 💋", reply_markup=button)
+    user_msg_count[user_id] = count
+
+    if count > 5 and not is_paid(user_id):
+        keyboard = [
+            [InlineKeyboardButton("Unlock Chat 🔓", url=RAZORPAY_PAYMENT_LINK)]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Babe, you've hit your free limit! 💸 Pay to keep this spicy convo going 🔥", reply_markup=reply_markup)
         return
 
-    await send_typing(context, update.effective_chat.id)
-    reply = generate_reply(user_message)
+    reply = await generate_reply(text, language)
     await update.message.reply_text(reply)
 
-    log_conversation(user_id, len(user_messages[user_id]), "en", user_message, reply)
+    log_to_sheet(user_id, count, language, text, reply)
 
-# Webhook setup
-app = FastAPI()
-
+# --- RAZORPAY WEBHOOK (Optional Future Use) ---
 @app.post("/webhook")
-async def webhook_handler(request: Request):
-    payload = await request.body()
-    signature = request.headers.get("X-Razorpay-Signature")
-    computed = hmac.new(
-        RAZORPAY_WEBHOOK_SECRET.encode(), payload, hashlib.sha256
-    ).hexdigest()
+async def razorpay_webhook(request: Request):
+    body = await request.body()
+    data = json.loads(body)
 
-    if hmac.compare_digest(computed, signature):
-        data = await request.json()
-        if data.get("event") == "payment.captured":
-            user_id = str(data["payload"]["payment"]["entity"].get("notes", {}).get("user_id"))
-            if user_id:
-                paid_users.add(int(user_id))
-        return {"status": "ok"}
-    return {"status": "unauthorized"}
+    if data.get("event") == "payment.captured":
+        payload = data["payload"]["payment"]["entity"]
+        email_or_notes = payload.get("email", "") or payload.get("notes", {}).get("user_id")
+        if email_or_notes:
+            paid_users.add(str(email_or_notes))
+            logger.info(f"✅ Added {email_or_notes} to paid users.")
 
-# Launch Telegram bot
+    return {"status": "ok"}
+
+# --- MAIN INIT ---
 async def main():
-    app_ = ApplicationBuilder().token(BOT_TOKEN).build()
-    app_.add_handler(CommandHandler("start", start))
-    app_.add_handler(CallbackQueryHandler(lambda *_: None))  # placeholder
-    app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    await app_.run_polling()
+    global application
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_msg))
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    await application.updater.idle()
 
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
+    asyncio.set_event_loop(loop)
     loop.create_task(main())
+    loop.run_forever()
+"""
+
+# Save to file for upload
+file_path = "/mnt/data/main.py"
+Path(file_path).write_text(main_py_code)
+file_path
