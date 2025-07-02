@@ -1,78 +1,132 @@
-import os, logging
+import os, logging, json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler,
-    MessageHandler, ContextTypes, filters
+    MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters
 )
 from langdetect import detect
 import openai
+import requests
 
-# ── ENV ───────────────────────────────────────
-BOT_TOKEN       = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
-PAY_LINK        = "https://rzp.io/rzp/93E7TRqj"  # change if needed
+# ENV
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+PAY_LINK = "https://rzp.io/i/93E7TRqj"  # fallback manual link
 
-# ── CONFIG ────────────────────────────────────
+# CONFIG
 FREE_LIMIT = 5
 openai.api_key = OPENAI_API_KEY
 logging.basicConfig(level=logging.INFO)
-user_counts: dict[int, int] = {}
+user_sessions = {}
+paid_users = set()
 
-# ── AI REPLY ──────────────────────────────────
-def ai_reply(text: str, lang: str) -> str:
-    sys = (
-        "You’re Riya, a chaotic, flirty Delhi girlfriend. "
-        "Mirror the user’s mood with Hinglish slang if Hindi detected, else Gen-Z English. "
-        "Be spicy, sweet, a bit savage, use emojis."
+# Razorpay Order API
+def create_order(user_id):
+    url = "https://api.razorpay.com/v1/orders"
+    data = {
+        "amount": 4900,
+        "currency": "INR",
+        "receipt": f"tg_{user_id}",
+        "payment_capture": 1
+    }
+    response = requests.post(
+        url,
+        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+        json=data
     )
-    if lang == "hi":
-        sys += " Reply mainly in Hinglish."
+    return response.json()
 
-    res = openai.ChatCompletion.create(
+def verify_payment(user_id):
+    url = f"https://api.razorpay.com/v1/payments"
+    response = requests.get(
+        url,
+        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
+    )
+    if response.status_code == 200:
+        data = response.json()
+        for payment in data["items"]:
+            if payment["status"] == "captured" and payment["receipt"] == f"tg_{user_id}":
+                return True
+    return False
+
+# Generate OpenAI reply
+async def generate_reply(message, language):
+    system_prompt = "You're Riya, a flirty, emotional AI girlfriend. Respond with sass and sweetness."
+    if language == "hi":
+        system_prompt += " Speak in Hinglish with desi swag and emojis 💕"
+    else:
+        system_prompt += " Use Gen Z tone, flirt, tease, and keep it spicy 😘"
+
+    response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=[{"role":"system","content":sys},
-                  {"role":"user","content":text}],
-        temperature=0.9
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message}
+        ]
     )
-    return res.choices[0].message.content.strip()
+    return response.choices[0].message.content.strip()
 
-# ── COMMANDS & HANDLERS ───────────────────────
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+# Payment prompt
+async def send_payment_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    order = create_order(str(user_id))
+    order_id = order["id"]
+    payment_url = f"https://rzp.io/i/{order_id}"
+
+    keyboard = [
+        [InlineKeyboardButton("💸 Unlock Full Access – ₹49", url=payment_url)],
+        [InlineKeyboardButton("✅ I already paid", callback_data="verify_payment")]
+    ]
     await update.message.reply_text(
-        "Heyyy 💜 I’m Riya – your chaotic virtual bae!\n\nLet’s chat, flirt, vibe 😘"
+        "You’ve used up your 5 free messages 💔
+
+Wanna keep chatting with me? 😉",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid   = update.effective_user.id
-    text  = update.message.text
-    lang  = detect(text)
+# Handlers
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Heyy, I'm Riya 💋
+Type anything to start chatting!")
 
-    user_counts.setdefault(uid, 0)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_sessions.setdefault(user_id, {"count": 0})
 
-    if user_counts[uid] >= FREE_LIMIT:
-        btn = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Unlock Full Access 💖", url=PAY_LINK)]]
-        )
-        await update.message.reply_text(
-            "Oops 😳 Your 5 free messages are over!\nBuy me a coffee & let’s keep vibing ☕👇",
-            reply_markup=btn
-        )
+    if user_id in paid_users:
+        pass  # Unlimited chat
+    elif user_sessions[user_id]["count"] >= FREE_LIMIT:
+        await send_payment_prompt(update, context)
         return
+    else:
+        user_sessions[user_id]["count"] += 1
 
-    user_counts[uid] += 1
-    await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
-
-    try:
-        reply = ai_reply(text, lang)
-    except Exception as e:
-        logging.error(e)
-        reply = "Riya’s having a mood swing 😓 Try again?"
-
+    user_message = update.message.text
+    language = detect(user_message)
+    reply = await generate_reply(user_message, language)
     await update.message.reply_text(reply)
 
-# ── RUN ───────────────────────────────────────
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "verify_payment":
+        if verify_payment(user_id):
+            paid_users.add(user_id)
+            await query.edit_message_text("✅ Payment confirmed! Let’s continue 💕")
+        else:
+            await query.edit_message_text("❌ No payment found yet. Try again after a min!")
+
+# Run App
 if __name__ == "__main__":
-    bot = ApplicationBuilder().token(BOT_TOKEN).build()
-    bot.add_handler(CommandHandler("start", start))
-    bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
-    bot.run_polling()  # ← ✅ clean, no asyncio issues
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    app.run_polling()
