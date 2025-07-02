@@ -1,4 +1,4 @@
-import os, json, logging, requests
+import os, logging, json, requests, hmac, hashlib
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -16,6 +16,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 FREE_LIMIT = int(os.getenv("FREE_LIMIT", 5))
 
@@ -24,19 +25,22 @@ logging.basicConfig(level=logging.INFO)
 user_sessions = {}
 paid_users = set()
 
-# ✅ Google Sheet Setup
+# ✅ FastAPI App for webhook
+app = FastAPI()
+
+# ✅ Google Sheet Logging
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDS_JSON), scope)
 client = gspread.authorize(creds)
 sheet = client.open("Riya Conversations").sheet1
 
-def log_to_sheet(user_id, message, reply):
+def log_to_sheet(user_id, user_message, reply):
     try:
-        sheet.append_row([str(user_id), message, reply])
+        sheet.append_row([str(user_id), user_message, reply])
     except Exception as e:
-        logging.error(f"Sheet logging failed: {e}")
+        logging.error(f"Sheet log failed: {e}")
 
-# ✅ Razorpay Order API
+# ✅ Razorpay Order API Logic
 def create_order(user_id):
     url = "https://api.razorpay.com/v1/orders"
     data = {
@@ -45,17 +49,39 @@ def create_order(user_id):
         "receipt": f"tg_{user_id}",
         "payment_capture": 1
     }
-    response = requests.post(url, auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET), json=data)
+    response = requests.post(
+        url,
+        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+        json=data
+    )
     return response.json()
 
-def verify_payment(user_id):
-    url = "https://api.razorpay.com/v1/payments"
-    response = requests.get(url, auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-    if response.status_code == 200:
-        for payment in response.json().get("items", []):
-            if payment["status"] == "captured" and f"tg_{user_id}" in str(payment.get("notes", {})):
-                return True
-    return False
+# ✅ Webhook Endpoint for Razorpay
+@app.post("/razorpay/webhook")
+async def razorpay_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature")
+
+    expected = hmac.new(
+        bytes(RAZORPAY_WEBHOOK_SECRET, 'utf-8'),
+        msg=body,
+        digestmod=hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        return {"status": "invalid signature"}
+
+    payload = json.loads(body)
+    try:
+        if payload.get("event") == "payment.captured":
+            receipt = payload["payload"]["payment"]["entity"].get("receipt", "")
+            if "tg_" in receipt:
+                user_id = int(receipt.split("_")[1])
+                paid_users.add(user_id)
+                return {"status": "unlocked"}
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+    return {"status": "ignored"}
 
 # ✅ AI Response
 async def generate_reply(message, language):
@@ -74,11 +100,12 @@ async def generate_reply(message, language):
     )
     return response.choices[0].message.content.strip()
 
-# ✅ Telegram Payment Prompt
+# ✅ Payment Prompt
 async def send_payment_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     order = create_order(user_id)
-    payment_url = f"https://rzp.io/i/{order['id']}" if "id" in order else "https://rzp.io/i/93E7TRqj"
+    order_id = order.get("id")
+    payment_url = f"https://rzp.io/i/{order_id}" if order_id else "https://rzp.io/i/93E7TRqj"
 
     keyboard = [
         [InlineKeyboardButton("💸 Unlock Full Access – ₹49", url=payment_url)],
@@ -89,7 +116,7 @@ async def send_payment_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ✅ Telegram Handlers
+# ✅ Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Heyy, I'm Riya 💋\nType anything to start chatting!")
 
@@ -117,34 +144,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     if query.data == "verify_payment":
-        if verify_payment(user_id):
-            paid_users.add(user_id)
-            await query.edit_message_text("✅ Payment confirmed! Let’s continue 💕")
-        else:
-            await query.edit_message_text("❌ No payment found yet. Try again after a min!")
+        await query.edit_message_text("🔄 We’ve switched to auto-unlock via payment confirmation 💸\nPlease wait a few seconds after you pay ✨")
 
-# ✅ Razorpay Webhook (FastAPI)
-app = FastAPI()
-
-@app.post("/unlock")
-async def unlock(request: Request):
-    payload = await request.json()
-    try:
-        if payload.get("event") == "payment.captured":
-            notes = payload["payload"]["payment"]["entity"].get("notes", {})
-            receipt = payload["payload"]["payment"]["entity"].get("receipt", "")
-            if "tg_" in receipt:
-                user_id = int(receipt.split("_")[1])
-                paid_users.add(user_id)
-                return {"status": "unlocked"}
-    except Exception as e:
-        logging.error(f"Webhook error: {e}")
-    return {"status": "ignored"}
-
-# ✅ Launch Telegram Bot
+# ✅ Run Bot
 if __name__ == "__main__":
-    tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
-    tg_app.add_handler(CommandHandler("start", start))
-    tg_app.add_handler(CallbackQueryHandler(callback_handler))
-    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    tg_app.run_polling()
+    telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(CallbackQueryHandler(callback_handler))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    telegram_app.run_polling()
