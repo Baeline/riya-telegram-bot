@@ -88,8 +88,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = user_message_count.get(user_id, 0)
     if count >= 5 and user_id not in verified_users:
         await update.message.reply_text(
-            "Hey cutie 😘 I’m Riya — Delhi’s sassiest virtual bae."
-            "You’ve used your 5 free messages. 💔 Want more spicy fun?",
+            "Hey cutie 😘 I'm Riya — Delhi's sassiest virtual bae."
+            "You've used your 5 free messages. 💔 Want more spicy fun?",
             reply_markup=get_pay_button()
         )
         return
@@ -110,8 +110,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Heyyy 💜 I'm Riya – your chaotic virtual bae!")
 
 
-Let’s chat, flirt, vibe 😘",
-    )
+"Let's chat, flirt, vibe 😘"
+)
 
 # Telegram bot startup
 async def main():
