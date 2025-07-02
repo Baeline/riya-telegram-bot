@@ -1,126 +1,119 @@
+from pathlib import Path
 
+# Clean and corrected version of main.py
+fixed_main_code = '''
 import os
 import logging
 import asyncio
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters
-)
-import openai
-import json
-import gspread
-from google.oauth2.service_account import Credentials
-import razorpay
 from fastapi import FastAPI, Request
-from telegram.constants import ParseMode
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from openai import OpenAI
+import requests
+import json
 
-# ENV variables
+# ENV Vars
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 RAZORPAY_SECRET = os.getenv("RAZORPAY_SECRET")
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
-RAZORPAY_LINK = "https://rzp.io/rzp/93E7TRqj"
 
-# Setup
+# Constants
+PAYMENT_LINK = "https://rzp.io/rzp/93E7TRqj"
+LOG_SHEET_URL = "https://sheet.best/api/sheets/xxxxxxxxxx"  # Replace if needed
+
+# Init
 app = FastAPI()
-openai.api_key = OPENAI_API_KEY
-
+openai = OpenAI(api_key=OPENAI_API_KEY)
 logging.basicConfig(level=logging.INFO)
 
-# Google Sheets logging setup
-creds = json.loads(os.getenv("GOOGLE_CREDS_JSON"))
-scopes = ['https://www.googleapis.com/auth/spreadsheets']
-credentials = Credentials.from_service_account_info(creds, scopes=scopes)
-gc = gspread.authorize(credentials)
-sheet = gc.open("Riya Conversations").sheet1
-
-# In-memory user state
+# Memory Store
 user_message_count = {}
-verified_users = set()
+paid_users = set()
 
-# Telegram UI
-def get_pay_button():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💖 Unlock More Messages", url=RAZORPAY_LINK)]
-    ])
+# Riya Prompt
+def build_prompt(user_input):
+    return [
+        {"role": "system", "content": "You're Riya – Delhi’s sassiest virtual bae. You flirt, tease, comfort, and mirror tone. Keep it spicy but lovable."},
+        {"role": "user", "content": user_input}
+    ]
 
-# Razorpay Webhook
+# AI Reply
+async def generate_reply(user_input):
+    response = openai.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=build_prompt(user_input)
+    )
+    return response.choices[0].message.content.strip()
+
+# Start Command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Heyyy 💜 I’m Riya – your chaotic virtual bae!\n\nLet’s chat, flirt, vibe 😘")
+
+# Razorpay Webhook Endpoint
 @app.post("/webhook")
-async def webhook(request: Request):
-    body = await request.json()
-    payment_status = body.get("event")
-    payload = body.get("payload", {})
-    email = payload.get("payment", {}).get("entity", {}).get("email", "")
-    contact = payload.get("payment", {}).get("entity", {}).get("contact", "")
-    if payment_status == "payment.captured":
-        verified_users.add(email or contact)
+async def handle_payment_webhook(request: Request):
+    payload = await request.json()
+    logging.info("Webhook payload: %s", json.dumps(payload))
+    try:
+        if payload.get("event") == "payment.captured":
+            contact = payload["payload"]["payment"]["entity"]["email"]
+            if contact:
+                paid_users.add(contact)
+                logging.info(f"✅ Payment received and added: {contact}")
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
     return {"status": "ok"}
 
-# GPT Reply Generator
-async def generate_reply(prompt: str, language: str = "en") -> str:
-    system_prompt = (
-        "You're Riya, a chaotic, flirty, emotional Indian virtual girlfriend. "
-        "Talk in a playful Hinglish tone. Use emojis. Be unpredictable, spicy but sweet."
-    )
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return response.choices[0].message["content"]
-
-# Handle user messages
+# Message Handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    user_lang = update.effective_user.language_code or "en"
-    user_msg = update.message.text.strip()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
 
-    # Count messages
-    count = user_message_count.get(user_id, 0)
-    if count >= 5 and user_id not in verified_users:
-        await update.message.reply_text(
-            "Hey cutie 😘 I'm Riya — Delhi's sassiest virtual bae."
-            "You've used your 5 free messages. 💔 Want more spicy fun?",
-            reply_markup=get_pay_button()
-        )
-        return
+    # Check paid status
+    if user_id in paid_users:
+        pass
+    else:
+        count = user_message_count.get(user_id, 0)
+        if count >= 5:
+            keyboard = [
+                [InlineKeyboardButton("💸 Unlock More Chats", url=PAYMENT_LINK)]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("Your free chats are over 😭 Time to show me some love 💕", reply_markup=reply_markup)
+            return
+        user_message_count[user_id] = count + 1
 
-    # Generate reply
-    reply = await generate_reply(user_msg, user_lang)
-    await update.message.reply_text(reply, parse_mode=ParseMode.HTML)
+    # Typing + Reply
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    reply = await generate_reply(text)
+    await update.message.reply_text(reply)
 
-    # Log conversation
-    sheet.append_row([now, user_id, count + 1, user_lang, user_msg, reply])
+    # Optional Logging
+    try:
+        requests.post(LOG_SHEET_URL, json={
+            "user_id": user_id,
+            "message": text,
+            "reply": reply
+        })
+    except:
+        pass
 
-    # Update counter
-    user_message_count[user_id] = count + 1
-
-# /start handler
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
-        await update.message.reply_text("Heyyy 💜 I'm Riya – your chaotic virtual bae!")
-
-
-"Let's chat, flirt, vibe 😘")
-
-# Telegram bot startup
+# Telegram Bot Runner
 async def main():
-    app_ = ApplicationBuilder().token(BOT_TOKEN).build()
-    app_.add_handler(CommandHandler("start", start))
-    app_.add_handler(CallbackQueryHandler(lambda *_: None))  # Placeholder
-    app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    await app_.run_polling()
+    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    await app_bot.initialize()
+    await app_bot.start()
+    await app_bot.updater.start_polling()
+    await app_bot.idle()
 
-# Async start
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
+loop = asyncio.get_event_loop()
 loop.create_task(main())
+'''
+
+# Save to file
+file_path = Path("/mnt/data/main.py")
+file_path.write_text(fixed_main_code)
+
+file_path.name
