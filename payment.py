@@ -1,31 +1,24 @@
-# payment.py
 import razorpay
-import uuid
 import os
+import uuid
 
-# Get keys from environment variables (recommended) or hardcode temporarily
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "rzp_live_R92bH8qooQzbGF")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "A6wGGchHsr50VWqdW07Nvf7Y")
+# Load Razorpay keys from env
+RAZORPAY_KEY = os.getenv("RAZORPAY_KEY")
+RAZORPAY_SECRET = os.getenv("RAZORPAY_SECRET")
 
-# Razorpay client
-client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+client = razorpay.Client(auth=(RAZORPAY_KEY, RAZORPAY_SECRET))
 
-def create_order(user_id: str, amount_paise: int = 4900):
-    """
-    Create a Razorpay order. Amount is in paise (₹49 = 4900).
-    Returns the full order object including order['id']
-    """
-    receipt_id = f"tg_{user_id}_{str(uuid.uuid4())[:6]}"
-
-    order_data = {
-        "amount": amount_paise,
-        "currency": "INR",
-        "receipt": receipt_id,
-        "payment_capture": 1,
-        "notes": {
-            "telegram_user_id": user_id
+def create_order(amount, user_id):
+    try:
+        receipt_id = f"tg_{user_id}_{uuid.uuid4().hex[:8]}"
+        order_data = {
+            "amount": amount * 100,  # in paise
+            "currency": "INR",
+            "receipt": receipt_id,
+            "payment_capture": 1
         }
-    }
-
-    order = client.order.create(data=order_data)
-    return order
+        order = client.order.create(order_data)
+        return order["id"]
+    except Exception as e:
+        print("Failed to create Razorpay order:", str(e))
+        return None
