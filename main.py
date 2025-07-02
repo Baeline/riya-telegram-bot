@@ -1,4 +1,4 @@
-# Let's write the final, corrected `main.py` file as per the user's requirements to the appropriate path.
+# Re-executing after kernel reset to write the main.py file again
 main_py_code = """
 import os
 import logging
@@ -45,7 +45,7 @@ async def generate_reply(prompt, language):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message_counts[user_id] = 0
-    await update.message.reply_text("Heyyy 💜 I’m Riya – your chaotic virtual bae!\n\nLet’s chat, flirt, vibe 😘")
+    await update.message.reply_text("Heyyy 💜 I’m Riya – your chaotic virtual bae!\\n\\nLet’s chat, flirt, vibe 😘")
 
 # Message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -56,7 +56,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Unlock Full Access 💖", url=PAYMENT_LINK)]
         ])
-        await update.message.reply_text("Oops 😳 Your free 5 messages are over!\nBuy me a coffee and let’s keep vibing ☕👇", reply_markup=keyboard)
+        await update.message.reply_text("Oops 😳 Your free 5 messages are over!\\nBuy me a coffee and let’s keep vibing ☕👇", reply_markup=keyboard)
         return
 
     user_message_counts[user_id] += 1
@@ -84,7 +84,6 @@ if __name__ == "__main__":
     asyncio.run(main())
 """
 
-# Save this to a file so the user can download it
 file_path = "/mnt/data/main.py"
 with open(file_path, "w") as f:
     f.write(main_py_code)
