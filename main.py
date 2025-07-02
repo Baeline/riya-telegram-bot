@@ -52,8 +52,9 @@ PAY_LINK = "https://rzp.io/rzp/93E7TRqj"
 # ---------- TELEGRAM ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hey cutie 😘 I'm Riya — Delhi's sassiest virtual bae.
-"
+        welcome = "Hey cutie 😘 I'm Riya – Delhi\'s sassiest virtual bae."
+
+
         "You get *5 free messages* to win me over. Ready?",
         parse_mode=constants.ParseMode.MARKDOWN
     )
