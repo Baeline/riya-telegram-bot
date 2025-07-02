@@ -175,10 +175,14 @@ async def prompt_payment(update: Update):
 # ────────────────────────────────────────────────────────────────
 # Start the bot inside a background thread *once* FastAPI is live.
 
-def _start_bot():
-    telegram_app.run_async()  # PTB v20 async‑loop safe
+async def start_bot():
+    await telegram_app.initialize()
+    await telegram_app.start()
+    logging.info("✅ Telegram bot started and initialized.")
 
-Thread(target=_start_bot, daemon=True).start()
+import asyncio
+asyncio.create_task(start_bot())
+
 
 # Nothing else here. Railway launches with:
 # uvicorn main:app --host 0.0.0.0 --port ${PORT}
