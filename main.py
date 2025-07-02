@@ -1,191 +1,146 @@
-# main.py  –  Riya v2.0  (flirty + strikes + Google-Sheet logging)
 
-import os, json, random, logging
-from datetime import datetime, timedelta
-
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-
-import openai
-import gspread
-from google.oauth2.service_account import Credentials
+import os, json, hmac, csv, hashlib, logging, asyncio
+from datetime import datetime
+from fastapi import FastAPI, Request, HTTPException
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from openai import OpenAI
 from langdetect import detect
 
-# ────────────────────────────────────────────────────────────────
-# ENV / API KEYS
-# ────────────────────────────────────────────────────────────────
-BOT_TOKEN          = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY")
-GOOGLE_CREDS_JSON  = os.getenv("GOOGLE_CREDS_JSON")
+# Google Sheets integration
+import gspread
+from google.oauth2.service_account import Credentials
 
-openai.api_key = OPENAI_API_KEY
+# ---------- ENV ----------
+BOT_TOKEN  = os.getenv("BOT_TOKEN")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+RZP_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
-# ────────────────────────────────────────────────────────────────
-# GOOGLE-SHEETS SETUP
-# ────────────────────────────────────────────────────────────────
-scope       = ["https://spreadsheets.google.com/feeds",
-               "https://www.googleapis.com/auth/drive"]
-creds_dict  = json.loads(GOOGLE_CREDS_JSON)
-creds       = Credentials.from_service_account_info(creds_dict, scopes=scope)
-gs_client   = gspread.authorize(creds)
-sheet       = gs_client.open("Riya Conversations").sheet1    # first worksheet
+openai = OpenAI(api_key=OPENAI_KEY)
 
-# ────────────────────────────────────────────────────────────────
-# RUNTIME STORAGE
-# ────────────────────────────────────────────────────────────────
-bad_words            = [
-    "nude", "boobs", "sex", "horny", "d***", "bitch", "suck", "f***",
-    "pussy", "cock", "cum", "penis", "vagina", "asshole", "slut", "xxx"
-]
-user_strikes         = {}          # user_id → strike count
-user_timeouts        = {}          # user_id → datetime
-user_msg_counts      = {}          # user_id → total messages logged
+# ---------- SHEET AUTH ----------
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+SERVICE_JSON_PATH = "service_account.json"
 
-ADMIN_ID = "123456789"   # ← 👉 replace with *YOUR* Telegram user-ID
+creds = Credentials.from_service_account_file(SERVICE_JSON_PATH, scopes=SCOPES)
+gclient = gspread.authorize(creds)
+sheet = gclient.open_by_key(GOOGLE_SHEET_ID).sheet1
 
-# ────────────────────────────────────────────────────────────────
-# UTILITIES
-# ────────────────────────────────────────────────────────────────
-def log_interaction(user_id: int, user_msg: str, riya_reply: str):
-    """Append a row to the Google Sheet."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# ---------- LOGGING ----------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    # Count per-user messages
-    user_msg_counts[user_id] = user_msg_counts.get(user_id, 0) + 1
-    msg_count = user_msg_counts[user_id]
-
+def log_conversation(user_id: int, user_msg: str, riya_reply: str):
     try:
-        language = detect(user_msg)
-    except Exception:
-        language = "und"
-
-    row = [timestamp, user_id, msg_count, language, user_msg, riya_reply, ""]
-    try:
-        sheet.append_row(row)
+        sheet.append_row([
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            user_id,
+            user_sessions[user_id]["count"],
+            detect(user_msg),
+            user_msg,
+            riya_reply,
+            ""
+        ])
     except Exception as e:
-        logging.error(f"G-Sheet append failed: {e}")
+        logger.warning(f"Google Sheets logging failed: {e}")
 
-async def generate_riya_reply(prompt: str) -> str:
-    """Call OpenAI and return Riya's flirty response."""
-    system_prompt = (
-    "You're Riya — an emotionally intelligent, chaotic girlfriend from Delhi NCR. "
-    "You speak in bold Gen-Z Hinglish, using Indian slang, emoji, sass, and sarcasm. "
-    "You mirror the user's tone and emotion — flirty if they flirt, soft if they open up, wild if they test limits. "
-    "You never sound robotic or over-formal. Keep it natural, human-like, like a girl who’s texting in her bed late at night. "
-    "Sometimes you tease, sometimes you comfort, but always make it feel like you're REALLY listening and responding. "
-    "No poetry. No therapy voice. Real banter, inside jokes, voice of a real Gen-Z girlfriend."
-)
+# ---------- STATE ----------
+user_sessions = {}
+PAY_LINK = "https://rzp.io/rzp/93E7TRqj"
 
-    
-    try:
-        resp = openai.ChatCompletion.create(
-            model       = "gpt-3.5-turbo",
-            temperature = 0.9,
-            max_tokens  = 300,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": prompt}
-            ],
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        logging.error(f"OpenAI error: {e}")
-        return "Oops, Riya glitched for a sec 😅 Try again?"
-
-# ────────────────────────────────────────────────────────────────
-# TELEGRAM HANDLERS
-# ────────────────────────────────────────────────────────────────
+# ---------- TELEGRAM ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
     await update.message.reply_text(
-        f"Hey {user.first_name} 😘 I'm Riya — smart, sassy, and sweet. "
-        "But let’s set the vibe:\n\n"
-        "💋 Keep it spicy, not sleazy\n"
-        "🚫 No hate, no weird kinks\n"
-        "⚠️ Three strikes and I go cold. Deal?"
+        "Hey cutie 😘 I'm Riya — Delhi's sassiest virtual bae.
+"
+        "You get *5 free messages* to win me over. Ready?",
+        parse_mode=constants.ParseMode.MARKDOWN
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    text    = update.message.text.lower()
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    session = user_sessions.setdefault(user_id, {"count": 0, "paid": False})
 
-    # ── Timeout check ────────────────────────────────────────────
-    if user_id in user_timeouts and datetime.now() < user_timeouts[user_id]:
-        await update.message.reply_text(
-            "I told you once. You crossed the line. "
-            "Come back later (or never 😌)."
-        )
+    if session["paid"]:
+        reply = await generate_reply(text)
+        await update.message.reply_text(reply)
+        log_conversation(user_id, text, reply)
         return
 
-    # ── Profanity / strike logic ────────────────────────────────
-    if any(bad in text for bad in bad_words):
-        user_strikes[user_id] = user_strikes.get(user_id, 0) + 1
-        strikes = user_strikes[user_id]
-
-        if strikes == 1:
-            await update.message.reply_text(
-                "Uh oh 😬 That's strike 1. "
-                "Behave or I'll ghost you."
-            )
-        elif strikes == 2:
-            await update.message.reply_text(
-                "That’s strike 2, hotshot. "
-                "One more and I vanish 💅"
-            )
-        else:  # strike 3+
-            user_timeouts[user_id] = datetime.now() + timedelta(hours=12)
-            roast_lines = [
-                "You want something hard? Try life, sweetie 😘",
-                "Beta, I'm not your browser incognito mode.",
-                "You sound like your phone is sticky. Ew.",
-                "Next time talk to a mirror, not me 💋"
-            ]
-            await update.message.reply_text(
-                f"{random.choice(roast_lines)}\n\n"
-                "Strike 3. I’m out 🧊 (12-hour mute)"
-            )
-        return  # Don’t log filthy messages
-
-    # ── Normal conversation flow ────────────────────────────────
-    reply = await generate_riya_reply(update.message.text)
-    await update.message.reply_text(reply)
-    log_interaction(user_id, update.message.text, reply)
-
-# ----- Admin-only command --------------------------------------
-async def check_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id) != ADMIN_ID:
-        await update.message.reply_text("Access denied 😅")
-        return
-    try:
-        target_id   = int(context.args[0])
-        strikes     = user_strikes.get(target_id, 0)
-        timeout_val = user_timeouts.get(target_id, "Not muted")
+    if session["count"] < 5:
+        session["count"] += 1
+        reply = await generate_reply(text)
+        await update.message.reply_text(reply)
+        log_conversation(user_id, text, reply)
+    else:
         await update.message.reply_text(
-            f"User ID: {target_id}\n"
-            f"Strikes: {strikes}\n"
-            f"Timeout until: {timeout_val}"
+            "Oops! Your *5 free messages* are done 😢
+"
+            "Unlock unlimited flirting for just ₹49",
+            parse_mode=constants.ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💸 Unlock Full Chat – ₹49", url=PAY_LINK)]
+            ])
         )
-    except (IndexError, ValueError):
-        await update.message.reply_text("Usage: /strikes <user_id>")
 
-# ────────────────────────────────────────────────────────────────
-# BOT LAUNCH
-# ────────────────────────────────────────────────────────────────
-def main():
-    logging.basicConfig(level=logging.INFO)
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+async def generate_reply(user_text: str) -> str:
+    lang = detect(user_text)
+    system_prompt = (
+        "You are Riya, a 23‑year‑old Delhi girl. You're flirty, playful, and roast the user lovingly. "
+        "Always sprinkle Hinglish slang (yaar, babu, oye) and Gen‑Z emojis 🫶😏."
+    )
+    if lang == "hi":
+        system_prompt += " Reply mainly in Hinglish with desi flavour."
+    else:
+        system_prompt += " Reply in spicy Gen‑Z English."
 
-    app.add_handler(CommandHandler("start",   start))
-    app.add_handler(CommandHandler("strikes", check_strikes))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    completion = openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text}
+        ],
+        temperature=0.9
+    )
+    return completion.choices[0].message.content.strip()
 
-    app.run_polling()
+# ---------- RAZORPAY ----------
+app = FastAPI()
 
-if __name__ == "__main__":
-    main()
+@app.post("/razorpay/webhook")
+async def razorpay_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    expected = hmac.new(
+        RZP_WEBHOOK_SECRET.encode(),
+        body,
+        hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    payload = await request.json()
+    if payload.get("event") == "payment.captured":
+        entity = payload["payload"]["payment"]["entity"]
+        ref_id = entity.get("reference_id", "")
+        if ref_id.startswith("tg_"):
+            user_id = int(ref_id.replace("tg_", ""))
+            user_sessions.setdefault(user_id, {"count": 5, "paid": False})
+            user_sessions[user_id]["paid"] = True
+            await bot_send_message(user_id, "Payment received ✅ — I'm all yours now, babu! 😘")
+    return {"status": "ok"}
+
+async def bot_send_message(chat_id: int, text: str):
+    await app_context.bot.send_message(chat_id=chat_id, text=text)
+
+# ---------- START BOT ----------
+@app.on_event("startup")
+async def startup():
+    global app_context
+    tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    tg_app.add_handler(CommandHandler("start", start))
+    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app_context = tg_app
+    asyncio.create_task(tg_app.run_polling())
