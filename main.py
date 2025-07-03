@@ -146,13 +146,10 @@ tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler)
 # ──────────────────── FASTAPI ENDPOINTS ──────────────────────
 @app.post(f"/webhook/{BOT_TOKEN}")
 async def telegram_webhook(req: Request):
-    """Endpoint for Telegram to deliver updates."""
-    try:
-        data = await req.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+    data = await req.json()
     await tg_app.process_update(Update.de_json(data, tg_app.bot))
     return {"ok": True}
+
 
 
 @app.post("/razorpay-webhook")
