@@ -145,11 +145,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     plan = PLANS[plan_key]
-    upi_msg = f"To unlock {plan['label']}, pay ₹{plan['amount']} to UPI ID:
-
-🧾 `{UPI_ID}`
-
-After payment, send screenshot to @baeline_support 🪄"
+    upi_msg = f"To unlock {plan['label']}, pay ₹{plan['amount']} to UPI ID:\n\n🧾 `{UPI_ID}`\n\nAfter payment, send screenshot to @baeline_support 🪄"
     await query.message.reply_text(upi_msg, parse_mode="Markdown")
     log_to_sheet(user_id, f"Clicked plan: {plan_key}", "", plan=plan_key)
 
