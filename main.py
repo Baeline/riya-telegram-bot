@@ -200,4 +200,6 @@ async def razorpay_webhook(request: Request):
 @app.post(f"/webhook/{BOT_TOKEN}")
 async def telegram_webhook(req: Request):
     data = await req.json()
-    if not tg
+    await tg_app.process_update(Update.de_json(data, tg_app.bot))
+    return {"ok": True}
+
