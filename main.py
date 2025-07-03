@@ -147,8 +147,14 @@ tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler)
 @app.post(f"/webhook/{BOT_TOKEN}")
 async def telegram_webhook(req: Request):
     data = await req.json()
+
+    # 💥 Ensure the app is initialized
+    if not tg_app.running:
+        await tg_app.initialize()
+
     await tg_app.process_update(Update.de_json(data, tg_app.bot))
     return {"ok": True}
+
 
 
 
