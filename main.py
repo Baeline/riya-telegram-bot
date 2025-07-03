@@ -17,6 +17,7 @@ from telegram.ext import (
 import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import io
 
 # ───────────────────────── ENV ───────────────────────────────
 BOT_TOKEN         = os.getenv("BOT_TOKEN")
@@ -33,9 +34,10 @@ openai.api_key = OPENAI_API_KEY
 
 # ──────────────────────── SHEET INIT ─────────────────────────
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(os.getenv("GOOGLE_CREDS_JSON"))
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-
+creds_json = os.getenv("GOOGLE_CREDS_JSON")
+creds = ServiceAccountCredentials.from_json_keyfile_name(
+    json.loads(creds_json) if creds_json.strip().startswith('{') else creds_json, scope
+)
 sheet_client = gspread.authorize(creds)
 sheet = sheet_client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
 
@@ -147,7 +149,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     plan = PLANS[plan_key]
-    upi_msg = f"To unlock {plan['label']}, pay ₹{plan['amount']} to UPI ID:\n\n🧾 `{UPI_ID}`\n\nAfter payment, send screenshot to @baeline_support "
+    upi_msg = f"To unlock {plan['label']}, pay ₹{plan['amount']} to UPI ID:\n\n🧾 `{UPI_ID}`\n\nAfter payment, send screenshot to @baeline_support 🪄"
     await query.message.reply_text(upi_msg, parse_mode="Markdown")
     log_to_sheet(user_id, f"Clicked plan: {plan_key}", "", plan=plan_key)
 
