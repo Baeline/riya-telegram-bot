@@ -198,12 +198,16 @@ async def razorpay_webhook(request: Request):
 
 # ───────────────── Telegram Webhook ─────────────────────────
 # ───────────────── Telegram Webhook ─────────────────────────
+@app.on_event("startup")
+async def on_startup():
+    await tg_app.initialize()
+
 @app.post(f"/webhook/{BOT_TOKEN}")
 async def telegram_webhook(req: Request):
     data = await req.json()
-    update = Update.de_json(data, tg_app.bot)
-    await tg_app.process_update(update)
+    await tg_app.process_update(Update.de_json(data, tg_app.bot))
     return {"ok": True}
+
 
 # ───────────────── PTB Polling Fallback (Optional) ───────────
 if __name__ == "__main__":
