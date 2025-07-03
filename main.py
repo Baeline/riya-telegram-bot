@@ -197,9 +197,20 @@ async def telegram_webhook(req: Request):
     return {"ok": True}
 
 # ────────────────────────── Launch ───────────────────────────
-if __name__ == "__main__":
+# ────────────────────────── Launch ───────────────────────────
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     tg_app.add_handler(CommandHandler("start", start))
     tg_app.add_handler(CommandHandler("unlock", unlock_command))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     tg_app.add_handler(CallbackQueryHandler(button_handler))
-    tg_app.run_polling()
+
+    await tg_app.initialize()
+    await tg_app.start()
+    yield
+    await tg_app.stop()
+    await tg_app.shutdown()
+
+app.router.lifespan_context = lifespan
