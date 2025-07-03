@@ -156,8 +156,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @app.post(f"/webhook/{BOT_TOKEN}")
 async def telegram_webhook(req: Request):
     data = await req.json()
+
+    # ✅ Initialize the bot for webhook-based updates
+    if not tg_app.running:
+        await tg_app.initialize()
+
     await tg_app.process_update(Update.de_json(data, tg_app.bot))
     return {"ok": True}
+
 
 # ──────────────────── Launch ────────────────────────────────
 if __name__ == "__main__":
