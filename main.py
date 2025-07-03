@@ -35,9 +35,8 @@ openai.api_key = OPENAI_API_KEY
 # ──────────────────────── SHEET INIT ─────────────────────────
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds_json = os.getenv("GOOGLE_CREDS_JSON")
-creds = ServiceAccountCredentials.from_json_keyfile_name(
-    json.loads(creds_json) if creds_json.strip().startswith('{') else creds_json, scope
-)
+creds_data = json.loads(creds_json)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_data, scope)
 sheet_client = gspread.authorize(creds)
 sheet = sheet_client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
 
