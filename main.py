@@ -196,11 +196,18 @@ async def razorpay_webhook(request: Request):
             log.info("🔓 Auto‑unlocked user %s for plan %s", user_id, plan_key)
     return {"status": "ok"}
 
-# ───────────────── Telegram Webhook ─────────────────────────
-# ───────────────── Telegram Webhook ─────────────────────────
+# ───────────── Start App + Initialize Telegram ──────────────
+import uvicorn
+
 @app.on_event("startup")
-async def on_startup():
+async def startup():
     await tg_app.initialize()
+    tg_app.add_handlers([
+        CommandHandler("start", start),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, on_message),
+        CallbackQueryHandler(button_handler)
+    ])
+    log.info("✅ Telegram app initialized!")
 
 @app.post(f"/webhook/{BOT_TOKEN}")
 async def telegram_webhook(req: Request):
@@ -208,13 +215,5 @@ async def telegram_webhook(req: Request):
     await tg_app.process_update(Update.de_json(data, tg_app.bot))
     return {"ok": True}
 
-
-# ───────────────── PTB Polling Fallback (Optional) ───────────
 if __name__ == "__main__":
-    tg_app.add_handler(CommandHandler("start", start))
-    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
-    tg_app.add_handler(CallbackQueryHandler(button_handler))
-
-    tg_app.run_polling()
-
-
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
