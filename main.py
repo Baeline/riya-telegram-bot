@@ -156,14 +156,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @app.post(f"/webhook/{BOT_TOKEN}")
 async def telegram_webhook(req: Request):
     data = await req.json()
-
-    # ✅ Initialize the bot for webhook-based updates
-    if not tg_app.running:
-        await tg_app.initialize()
-
     await tg_app.process_update(Update.de_json(data, tg_app.bot))
     return {"ok": True}
-
 
 # ──────────────────── Launch ────────────────────────────────
 async def setup():
@@ -171,8 +165,9 @@ async def setup():
     tg_app.add_handler(CommandHandler("unlock", unlock_command))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     tg_app.add_handler(CallbackQueryHandler(button_handler))
-    
+
     await tg_app.initialize()
     await tg_app.start()
 
+# Schedule background task
 asyncio.get_event_loop().create_task(setup())
